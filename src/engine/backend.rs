@@ -1,5 +1,4 @@
 use kzg::{FFTSettings, Fr, G1Affine, G1Fp, G1GetFp, G1Mul, KZGSettings, Poly, G1, G2};
-use std::sync::Arc;
 
 pub trait Backend {
     type Fr: Fr;
@@ -26,21 +25,25 @@ pub trait Backend {
 
     fn new(cfg: BackendConfig) -> Self;
 
-    fn commit_to_poly(&self, poly: Arc<Self::Poly>) -> Result<Self::G1, String>;
+    fn commit_to_poly(&self, poly: Self::Poly) -> Result<Self::G1, String>;
 
     fn compute_proof_single(
         &self,
-        poly: Arc<Self::Poly>,
-        point: Arc<Self::Fr>,
+        poly: Self::Poly,
+        point: Self::Fr,
     ) -> Result<Self::G1, String>;
 
     fn verify_proof_single(
         &self,
-        proof: Arc<Self::G1>,
-        x: Arc<Self::Fr>,
-        y: Arc<Self::Fr>,
-        commitment: Arc<Self::G1>,
+        proof: Self::G1,
+        x: Self::Fr,
+        y: Self::Fr,
+        commitment: Self::G1,
     ) -> Result<bool, String>;
+
+    fn parse_poly_from_str(&self, s: &[String]) -> Result<Self::Poly, String>;
+    fn parse_point_from_str(&self, s: &str) -> Result<Self::Fr, String>;
+    fn parse_g1_from_str(&self, s: &str) -> Result<Self::G1, String>;
 }
 
 #[derive(Debug, Clone)]

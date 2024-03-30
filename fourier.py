@@ -27,17 +27,17 @@ class RPCRequest:
 
     @staticmethod
     def commit(poly):
-        params = {"p": poly}
+        params = {"poly": poly}
         return RPCRequest(method="commit", params=params)
 
     @staticmethod
     def proof(poly, x, y):
-        params = {"p": poly, "x": x, "y": y}
+        params = {"poly": poly, "x": x, "y": y}
         return RPCRequest(method="prove", params=params)
 
     @staticmethod
     def verify(poly, x, y, proof):
-        params = {"p": poly, "x": x, "y": y, "proof": proof}
+        params = {"poly": poly, "x": x, "y": y, "proof": proof}
         return RPCRequest(method="verify", params=params)
 
 
@@ -117,7 +117,25 @@ class Client:
 if __name__ == "__main__":
     rpc = Client()
     rpc.start()
-    with rpc.commit("1 2 3 4") as resp:
+    poly = [
+        "6945DC5C4FF4DAC8A7278C9B8F0D4613320CF87FF947F21AC9BF42327EC19448",
+        "68E40C088D827BCCE02CEF34BDC8C12BB025FBEA047BC6C00C0C8C5C925B7FAF",
+        "67281FAC164E9348B80693BA30D5D4E311DE5878EB3D20E34A58507B484B243C",
+        "5F7C377DAE6B9D9ABAD75DC15E4FFF9FE7520D1F85224C95F485F44978154C5A",
+        "2D85C376A440B6E25C3F7C11559B6A27684023F36C3D7A0ACD7E7D019DE399C7",
+        "4A6FB95F0241B3583771E799120C87AAE3C843ECDB50A38254A92E198968922F",
+        "1005079F96EC412A719FE2E9FA67D421D98FB4DEC4181459E59430F5D502BD2A",
+        "64960B8692062DCB01C0FFBAC569478A89AD880ED3C9DF710BED5CE75F484693",
+        "03C2882155A447642BD21FB1CF2553F80955713F09BBBBD9724E2CBFD8B19D41",
+        "0AB07FECB59EE3435F6129FCD602CB519E56D7B426941633E37A3B676A24830F",
+        "12FA5861459EFFBAE654827D98BFDFEA5545DDF8BB9628579463DA21F17462B5",
+        "6A6296A0376D807530DB09DC8BB069FFDEC3D7541497B82C722A199D6B7C5B06",
+        "153D2C81B54D7E1C3E83EA61C7F66FD88155F1713EE581E2BE8438CA9FEE1A02",
+        "216BCCC4AE97FE3E1D4B21C375C46140FA153E7868201A43480889047ACD0C2D",
+        "381BD4FE924EB10E08F2A227D3DB2083AA0E5A1F661CD3C702C4B8A9385E7839",
+        "723A7640FD7E65473131563AB5514916AC861C2695CE6513E5061E597E5E1A81",
+    ]
+    with rpc.commit(poly) as resp:
         print(resp.text)
     with rpc.prove("1 2 3 4", "1", "10") as resp:
         print(resp.text)

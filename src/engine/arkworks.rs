@@ -1,5 +1,4 @@
-use kzg::{FFTSettings, KZGSettings};
-use std::sync::Arc;
+use kzg::{FFTSettings, Fr, KZGSettings, Poly, G1};
 
 pub struct ArkworksBackend {
     pub fft_settings: rust_kzg_arkworks::kzg_proofs::FFTSettings,
@@ -40,28 +39,50 @@ impl crate::engine::backend::Backend for ArkworksBackend {
         }
     }
 
-    fn commit_to_poly(&self, poly: Arc<Self::Poly>) -> Result<Self::G1, String> {
+    fn commit_to_poly(&self, poly: Self::Poly) -> Result<Self::G1, String> {
         self.kzg_settings.commit_to_poly(&poly)
     }
 
     fn compute_proof_single(
         &self,
-        poly: Arc<Self::Poly>,
-        point: Arc<Self::Fr>,
+        poly: Self::Poly,
+        point: Self::Fr,
     ) -> Result<Self::G1, String> {
         self.kzg_settings.compute_proof_single(&poly, &point)
     }
 
     fn verify_proof_single(
         &self,
-        proof: Arc<Self::G1>,
-        x: Arc<Self::Fr>,
-        y: Arc<Self::Fr>,
-        commitment: Arc<Self::G1>,
+        proof: Self::G1,
+        x: Self::Fr,
+        y: Self::Fr,
+        commitment: Self::G1,
     ) -> Result<bool, String> {
         self.kzg_settings
             .check_proof_single(&commitment, &proof, &x, &y)
     }
+
+    fn parse_point_from_str(&self, s: &str) -> Result<Self::Fr, String> {
+        Fr::from_bytes(hex::decode(s).map_err(|e| e.to_string())?.as_slice())
+    }
+
+    fn parse_poly_from_str(
+        &self,
+        s: &[String],
+    ) -> Result<Self::Poly, String> {
+        Ok(rust_kzg_arkworks::utils::PolyData::from_coeffs(&s
+            .iter()
+            .map(|x| Fr::from_bytes(hex::decode(x).map_err(|e| e.to_string())?.as_slice()))
+            .collect::<Result<Vec<Self::Fr>, String>>()?))
+    }
+
+    fn parse_g1_from_str(
+        &self,
+        s: &str,
+    ) -> Result<Self::G1, String> {
+        G1::from_bytes(hex::decode(s).map_err(|e| e.to_string())?.as_slice())
+    }
+
 }
 
 #[cfg(test)]
@@ -87,6 +108,7 @@ mod tests {
     }
 
     #[test]
+    #[tracing_test::traced_test]
     fn test_arkworks_backend() {
         const SECRET: [u8; 32usize] = [
             0xa4, 0x73, 0x31, 0x95, 0x28, 0xc8, 0xb6, 0xea, 0x4d, 0x08, 0xcc, 0x53, 0x18, 0x00,
@@ -97,15 +119,16 @@ mod tests {
 
         let backend =
             ArkworksBackend::new(crate::engine::backend::BackendConfig::new(SCALE, SECRET));
-        let poly = Arc::new(backend.random_poly());
-        let x = Arc::new(backend.random_fr());
-        let y = Arc::new(poly.eval(&x));
+        let poly = backend.random_poly();
+        tracing::info!("poly: {:?}", poly.clone());
+        let x = backend.random_fr();
+        let y = poly.eval(&x);
         let commitment = backend.commit_to_poly(poly.clone()).unwrap();
         let proof = backend
-            .compute_proof_single(poly.clone(), x.clone())
+            .compute_proof_single(poly.clone(), x)
             .unwrap();
         let result = backend
-            .verify_proof_single(Arc::new(proof), x, y, Arc::new(commitment))
+            .verify_proof_single(proof, x, y, commitment)
             .unwrap();
         assert!(result);
     }
