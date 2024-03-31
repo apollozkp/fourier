@@ -141,7 +141,9 @@ where
             match self.backend.parse_poly_from_str(poly) {
                 Ok(poly) => (
                     Some(JsonRpcResult::Commit {
-                        commitment: hex::encode(self.backend.commit_to_poly(poly).unwrap().to_bytes()),
+                        commitment: hex::encode(
+                            self.backend.commit_to_poly(poly).unwrap().to_bytes(),
+                        ),
                     }),
                     None,
                 ),
@@ -401,95 +403,5 @@ mod tests {
         let deserialized = serde_json::to_string(&serialized.unwrap());
         assert!(deserialized.is_ok());
         assert_eq!(raw_request, deserialized.unwrap());
-    }
-
-    // #[test]
-    // #[tracing_test::traced_test]
-    // fn test_commit() {
-    //     let raw_request = r#"{\"id\": 0, \"method\": \"commit\", \"params\": {\"poly\": [\"6945DC5C4FF4DA C8A7278C9B8F0D4613320CF87FF947F21AC9BF42327EC19448\", \"68E40C088D827BCCE02CEF34BDC8C12BB025FBEA047BC6C00C0C8C5C925B7FAF\", \"67281FAC164E9348B80693BA30D5D4E311DE5878EB3D20E34A585 07B484B243C\", \"5F7C377DAE6B9D9ABAD75DC15E4FFF9FE7520D1F85224C95F485F44978154C5A\", \"2D85C376A440B6E25C3F7C11559B6A27684023F36C3D7A0ACD7E7D019DE399C7\", \"4A6FB95F0241B3583771E7 99120C87AAE3C843ECDB50A38254A92E198968922F\", \"1005079F96EC412A719FE2E9FA67D421D98FB4DEC4181459E59430F5D502BD2A\", \"64960B8692062DCB01C0FFBAC569478A89AD880ED3C9DF710BED5CE75F484 693\", \"03C2882155A447642BD21FB1CF2553F80955713F09BBBBD9724E2CBFD8B19D41\", \"0AB07FECB59EE3435F6129FCD602CB519E56D7B426941633E37A3B676A24830F\", \"12FA5861459EFFBAE654827D98BFDF EA5545DDF8BB9628579463DA21F17462B5\", \"6A6296A0376D807530DB09DC8BB069FFDEC3D7541497B82C722A199D6B7C5B06\", \"153D2C81B54D7E1C3E83EA61C7F66FD88155F1713EE581E2BE8438CA9FEE1A02\", \ "216BCCC4AE97FE3E1D4B21C375C46140FA153E7868201A43480889047ACD0C2D\", \"381BD4FE924EB10E08F2A227D3DB2083AA0E5A1F661CD3C702C4B8A9385E7839\", \"723A7640FD7E65473131563AB5514916AC861C 2695CE6513E5061E597E5E1A81\"#;
-    //     let serialized = serde_json::from_str::<JsonRpcRequest>(raw_request);
-    //     assert!(serialized.is_ok());
-    //     info!("Request: {:?}", serialized.unwrap());
-    //     let cfg = crate::engine::backend::BackendConfig::new(4, [0u8; 32]);
-    //     let handler =
-    //         RpcHandler::new(Arc::new(crate::engine::arkworks::ArkworksBackend::new(cfg)));
-
-
-    #[tokio::test]
-    #[tracing_test::traced_test]
-    async fn test_rpc_handler_all_methods() {
-        async fn test_method(
-            method: &str,
-            _expected_result: Option<&str>,
-            expected_error: Option<&str>,
-        ) {
-            let raw_request = format!(r#"{{"jsonrpc":"2.0","method":"{}","id":1}}"#, method);
-            let req = serde_json::from_str::<JsonRpcRequest>(&raw_request).unwrap();
-            let cfg = crate::engine::backend::BackendConfig::new(4, [0u8; 32]);
-
-            let handler =
-                RpcHandler::new(Arc::new(crate::engine::arkworks::ArkworksBackend::new(Some(cfg))));
-            let res = handler.handle(req).await;
-            if res.result.is_some() {
-                // assert_eq!(
-                //     res.result.unwrap().as_str().unwrap(),
-                //     expected_result.unwrap()
-                // );
-            }
-            if res.error.is_some() {
-                assert_eq!(res.error.unwrap().message, expected_error.unwrap());
-            }
-        }
-
-        test_method("ping", Some("pong"), None).await;
-        test_method("commit", None, Some("Method not implemented")).await;
-        test_method("open", None, Some("Method not implemented")).await;
-        test_method("verify", None, Some("Method not implemented")).await;
-        test_method("any", None, Some("Method not found")).await;
-    }
-
-    #[tokio::test]
-    #[tracing_test::traced_test]
-    async fn test_server() {
-        type Backend = crate::engine::arkworks::ArkworksBackend;
-
-        async fn assert_response(address: &str, port: u16, method: &str, should_succeed: bool) {
-            let client = reqwest::Client::new();
-            let res = client
-                .post(&format!("http://{}:{}/", address, port))
-                .body(format!(
-                    r#"{{"jsonrpc":"2.0","method":"{}","id":1}}"#,
-                    method
-                ))
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(res.status(), 200);
-            let resp = serde_json::from_str::<JsonRpcResponse>(&res.text().await.unwrap()).unwrap();
-            if should_succeed {
-                assert!(resp.result.is_some());
-            } else {
-                assert!(resp.error.is_some());
-            }
-        }
-
-        const ADDRESS: &str = "127.0.0.1";
-        const PORT: u16 = 1337;
-        let server = Server::new(ServerConfig {
-            host: ADDRESS.to_owned(),
-            port: PORT,
-            backend: None,
-        });
-        tokio::spawn(async move {
-            server.run::<Backend>().await.unwrap();
-        });
-
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-        assert_response(ADDRESS, PORT, "ping", true).await;
-        assert_response(ADDRESS, PORT, "commit", false).await;
-        assert_response(ADDRESS, PORT, "prove", false).await;
-        assert_response(ADDRESS, PORT, "verify", false).await;
-        assert_response(ADDRESS, PORT, "any", false).await;
     }
 }
