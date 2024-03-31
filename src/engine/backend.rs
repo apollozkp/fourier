@@ -31,11 +31,7 @@ pub trait Backend {
 
     fn commit_to_poly(&self, poly: Self::Poly) -> Result<Self::G1, String>;
 
-    fn compute_proof_single(
-        &self,
-        poly: Self::Poly,
-        point: Self::Fr,
-    ) -> Result<Self::G1, String>;
+    fn compute_proof_single(&self, poly: Self::Poly, point: Self::Fr) -> Result<Self::G1, String>;
 
     fn verify_proof_single(
         &self,

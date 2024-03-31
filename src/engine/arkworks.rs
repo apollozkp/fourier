@@ -148,8 +148,7 @@ mod tests {
     #[tracing_test::traced_test]
     fn test_arkworks_backend() {
         let cfg = crate::engine::backend::BackendConfig::new(SCALE, SECRET);
-        let backend =
-            ArkworksBackend::new(Some(cfg.clone()));
+        let backend = ArkworksBackend::new(Some(cfg.clone()));
         let poly = backend.random_poly();
         tracing::info!("poly: {:?}", poly.clone());
         let x = backend.random_fr();
@@ -165,8 +164,7 @@ mod tests {
     #[test]
     fn test_arkworks_g1_serialize_deserialize() {
         let cfg = crate::engine::backend::BackendConfig::new(SCALE, SECRET);
-        let backend =
-            ArkworksBackend::new(Some(cfg.clone()));
+        let backend = ArkworksBackend::new(Some(cfg.clone()));
         let g1 = backend.random_g1();
         println!("g1: {:?}", g1);
         let g1_bytes = g1.to_bytes();
@@ -178,10 +176,9 @@ mod tests {
     #[tracing_test::traced_test]
     fn test_pipeline() {
         let cfg = crate::engine::backend::BackendConfig::new(SCALE, SECRET);
-        let backend =
-            ArkworksBackend::new(Some(cfg.clone()));
+        let backend = ArkworksBackend::new(Some(cfg.clone()));
 
-        // Get hardcoded poly 
+        // Get hardcoded poly
         let poly = backend
             .parse_poly_from_str(
                 &TEST_POLY

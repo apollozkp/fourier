@@ -392,7 +392,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::backend::Backend;
 
     #[test]
     #[tracing_test::traced_test]
