@@ -1,5 +1,4 @@
 import json
-import os
 import subprocess
 import time
 
@@ -31,13 +30,13 @@ class RPCRequest:
         return RPCRequest(method="commit", params=params)
 
     @staticmethod
-    def proof(poly, x, y):
-        params = {"poly": poly, "x": x, "y": y}
-        return RPCRequest(method="prove", params=params)
+    def open(poly, x):
+        params = {"poly": poly, "x": x}
+        return RPCRequest(method="open", params=params)
 
     @staticmethod
-    def verify(poly, x, y, proof):
-        params = {"poly": poly, "x": x, "y": y, "proof": proof}
+    def verify(proof, x, y, commitment):
+        params = {"proof": proof, "x": x, "y": y, "commitment": commitment}
         return RPCRequest(method="verify", params=params)
 
 
@@ -101,23 +100,78 @@ class Client:
         resp = requests.post(self.endpoint(), data=req.json())
         return resp
 
-    # Prove a commitment
-    def prove(self, poly: str, x: str, y: str) -> requests.Response:
-        req = RPCRequest.proof(poly, x, y)
+    # Open a commitment
+    def open(self, poly: str, x: str) -> requests.Response:
+        req = RPCRequest.open(poly, x)
         resp = requests.post(self.endpoint(), data=req.json())
         return resp
 
     # Verify a proof
-    def verify(self, poly: str, x: str, y: str, proof: str) -> requests.Response:
-        req = RPCRequest.verify(poly, x, y, proof)
+    def verify(self, proof: str, x: str, y: str, commitment: str) -> requests.Response:
+        req = RPCRequest.verify(proof, x, y, commitment)
         resp = requests.post(self.endpoint(), data=req.json())
         return resp
+
+
+def commit(rpc, poly):
+    with rpc.commit(poly) as resp:
+        data = resp.json()
+        if data.get("error"):
+            print(f"Error: {data.get('error')}")
+        return data.get("result", {}).get("commitment")
+    return None
+
+
+def open(rpc, poly, x):
+    with rpc.open(poly, x) as resp:
+        data = resp.json()
+        if data.get("error"):
+            print(f"Error: {data.get('error')}")
+        return data.get("result", {}).get("proof")
+    return None
+
+
+def verify(rpc, proof, x, y, commitment):
+    with rpc.verify(proof, x, y, commitment) as resp:
+        data = resp.json()
+        if data.get("error"):
+            print(f"Error: {data.get('error')}")
+        return data.get("result", {}).get("valid")
+    return None
+
+
+def test_pipeline(rpc, poly, x, y, expected_commitment=None, expected_proof=None):
+    commitment = commit(rpc, poly)
+    if not commitment:
+        print("Failed to commit to polynomial.")
+        return
+    if expected_commitment and commitment != expected_commitment:
+        print(
+            f"Commitment mismatch. Expected: {expected_commitment}, Got: {commitment}"
+        )
+    else:
+        print(f"Commitment: {commitment}")
+
+    proof = open(rpc, poly, x)
+    if not proof:
+        print("Failed to open commitment.")
+        return
+    if expected_proof and proof != expected_proof:
+        print(f"Proof mismatch. Expected: {expected_proof}, Got: {proof}")
+    else:
+        print(f"Proof: {proof}")
+
+    valid = verify(rpc, proof, x, y, commitment)
+    if not valid:
+        print("Failed to verify proof.")
+        return
+    print(f"Verification: {valid}")
 
 
 if __name__ == "__main__":
     rpc = Client()
     rpc.start()
-    poly = [
+    TEST_POLY = [
         "6945DC5C4FF4DAC8A7278C9B8F0D4613320CF87FF947F21AC9BF42327EC19448",
         "68E40C088D827BCCE02CEF34BDC8C12BB025FBEA047BC6C00C0C8C5C925B7FAF",
         "67281FAC164E9348B80693BA30D5D4E311DE5878EB3D20E34A58507B484B243C",
@@ -135,10 +189,21 @@ if __name__ == "__main__":
         "381BD4FE924EB10E08F2A227D3DB2083AA0E5A1F661CD3C702C4B8A9385E7839",
         "723A7640FD7E65473131563AB5514916AC861C2695CE6513E5061E597E5E1A81",
     ]
-    with rpc.commit(poly) as resp:
-        print(resp.text)
-    with rpc.prove("1 2 3 4", "1", "10") as resp:
-        print(resp.text)
-    with rpc.verify("1 2 3 4", "1", "10", "1 2 3") as resp:
-        print(resp.text)
+
+    TEST_POINT = "456006fff56412d329d527901d02877a581a89cfa677ca963eb9d680766234cc"
+    TEST_EVAL = "29732a1e0e074ab05ee6a9e57794c5ad1965b98b6c8c6ecde96ac776ea06ff5b"
+
+    # compressed hex
+    TEST_COMMITMENT = "8424fb9dc224ab79efccf6710edea3b936d03bbd323f052bb9c4b2efe9f98239e7c3e48148f243065cee910054a10e71"
+    TEST_PROOF = "895cdfe1bf26bbf10bdc0d90178ec89635269cca7c9b39836a76e91689ad3fa4d1772f8d60cdd86cd4bfd1dedbdec81d"
+
+    test_pipeline(
+        rpc,
+        TEST_POLY,
+        TEST_POINT,
+        TEST_EVAL,
+        expected_commitment=TEST_COMMITMENT,
+        expected_proof=TEST_PROOF,
+    )
+
     rpc.stop()

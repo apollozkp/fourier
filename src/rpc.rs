@@ -19,23 +19,37 @@ struct JsonRpcRequest {
     id: Option<Value>,
 }
 
+impl JsonRpcRequest {
+    fn response(
+        &self,
+        result: Option<JsonRpcResult>,
+        error: Option<JsonRpcError>,
+    ) -> JsonRpcResponse {
+        JsonRpcResponse {
+            jsonrpc: "2.0".to_owned(),
+            result,
+            error,
+            id: self.id.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum JsonRpcParams {
     Ping,
-    Commit {
-        poly: Vec<String>,
-    },
-    Prove {
-        poly: Vec<String>,
-        x: String,
-        y: String,
-    },
     Verify {
         proof: String,
         x: String,
         y: String,
         commitment: String,
+    },
+    Open {
+        poly: Vec<String>,
+        x: String,
+    },
+    Commit {
+        poly: Vec<String>,
     },
 }
 
@@ -46,14 +60,14 @@ struct JsonRpcResponse {
     result: Option<JsonRpcResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<JsonRpcError>,
-    id: Value,
+    id: Option<Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum JsonRpcResult {
     Commit { commitment: String },
-    Prove { proof: String },
+    Open { proof: String },
     Verify { valid: bool },
     Pong,
 }
@@ -72,8 +86,8 @@ pub enum Method {
     #[serde(rename = "commit")]
     Commit,
 
-    #[serde(rename = "prove")]
-    Prove,
+    #[serde(rename = "open")]
+    Open,
 
     #[serde(rename = "verify")]
     Verify,
@@ -110,45 +124,27 @@ where
 
     async fn handle(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         match req.method {
-            Method::Ping => Self::handle_ping(),
+            Method::Ping => Self::handle_ping(req),
             Method::Commit => self.handle_commit(req),
-            Method::Prove => Self::handle_prove(req),
-            Method::Verify => Self::handle_verify(req),
-            Method::NotSupported => Self::handle_not_supported(),
+            Method::Open => self.handle_open(req),
+            Method::Verify => self.handle_verify(req),
+            Method::NotSupported => Self::handle_not_supported(Some(req)),
         }
     }
 
-    fn handle_ping() -> JsonRpcResponse {
-        JsonRpcResponse {
-            jsonrpc: "2.0".to_owned(),
-            result: Some(JsonRpcResult::Pong),
-            error: None,
-            id: Value::Null,
-        }
+    fn handle_ping(req: JsonRpcRequest) -> JsonRpcResponse {
+        req.response(Some(JsonRpcResult::Pong), None)
     }
 
-    fn handle_commit(&self, _req: JsonRpcRequest) -> JsonRpcResponse {
-        if let Some(JsonRpcParams::Commit { poly }) = _req.params {
-            let poly = self.backend.parse_poly_from_str(&poly);
-            let (result, error) = match poly {
-                Ok(poly) => {
-                    let result = self.backend.commit_to_poly(poly);
-                    match result {
-                        Ok(commitment) => (
-                            Some(JsonRpcResult::Commit {
-                                commitment: hex::encode(commitment.to_bytes()),
-                            }),
-                            None,
-                        ),
-                        Err(err) => (
-                            None,
-                            Some(JsonRpcError {
-                                code: -32000,
-                                message: err,
-                            }),
-                        ),
-                    }
-                }
+    fn handle_commit(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let (result, error) = if let Some(JsonRpcParams::Commit { ref poly }) = req.params {
+            match self.backend.parse_poly_from_str(poly) {
+                Ok(poly) => (
+                    Some(JsonRpcResult::Commit {
+                        commitment: hex::encode(self.backend.commit_to_poly(poly).unwrap().to_bytes()),
+                    }),
+                    None,
+                ),
                 Err(err) => (
                     None,
                     Some(JsonRpcError {
@@ -156,60 +152,116 @@ where
                         message: err,
                     }),
                 ),
-            };
-
-            JsonRpcResponse {
-                jsonrpc: "2.0".to_owned(),
-                result,
-                error,
-                id: Value::Null,
             }
         } else {
-            JsonRpcResponse {
-                jsonrpc: "2.0".to_owned(),
-                result: None,
-                error: Some(JsonRpcError {
+            (
+                None,
+                Some(JsonRpcError {
                     code: -32602,
                     message: "Invalid params".to_owned(),
                 }),
-                id: Value::Null,
+            )
+        };
+        req.response(result, error)
+    }
+
+    fn handle_open(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let (result, err) = if let Some(JsonRpcParams::Open { ref poly, ref x }) = req.params {
+            match (|| {
+                Ok((
+                    self.backend.parse_poly_from_str(poly)?,
+                    self.backend.parse_point_from_str(x)?,
+                ))
+            })() {
+                Ok((poly, x)) => (
+                    Some(JsonRpcResult::Open {
+                        proof: hex::encode(
+                            self.backend
+                                .compute_proof_single(poly, x)
+                                .unwrap()
+                                .to_bytes(),
+                        ),
+                    }),
+                    None,
+                ),
+                Err(err) => (
+                    None,
+                    Some(JsonRpcError {
+                        code: -32000,
+                        message: err,
+                    }),
+                ),
             }
-        }
+        } else {
+            (
+                None,
+                Some(JsonRpcError {
+                    code: -32602,
+                    message: "Invalid params".to_owned(),
+                }),
+            )
+        };
+        req.response(result, err)
     }
 
-    fn handle_prove(_req: JsonRpcRequest) -> JsonRpcResponse {
-        JsonRpcResponse {
-            jsonrpc: "2.0".to_owned(),
-            result: None,
-            error: Some(JsonRpcError {
-                code: -32601,
+    fn handle_verify(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let (result, err) = if let Some(JsonRpcParams::Verify {
+            ref proof,
+            ref x,
+            ref y,
+            ref commitment,
+        }) = req.params
+        {
+            match (|| {
+                Ok((
+                    self.backend.parse_g1_from_str(proof)?,
+                    self.backend.parse_point_from_str(x)?,
+                    self.backend.parse_point_from_str(y)?,
+                    self.backend.parse_g1_from_str(commitment)?,
+                ))
+            })() {
+                Ok((proof, x, y, commitment)) => (
+                    Some(JsonRpcResult::Verify {
+                        valid: self
+                            .backend
+                            .verify_proof_single(proof, x, y, commitment)
+                            .unwrap(),
+                    }),
+                    None,
+                ),
+                Err(err) => (
+                    None,
+                    Some(JsonRpcError {
+                        code: -32000,
+                        message: err,
+                    }),
+                ),
+            }
+        } else {
+            (
+                None,
+                Some(JsonRpcError {
+                    code: -32602,
+                    message: "Invalid params".to_owned(),
+                }),
+            )
+        };
+        req.response(result, err)
+    }
+
+    fn handle_not_supported(req: Option<JsonRpcRequest>) -> JsonRpcResponse {
+        let (result, err) = (
+            None,
+            Some(JsonRpcError {
+                code: -32000,
                 message: "Method not implemented".to_owned(),
             }),
-            id: Value::Null,
-        }
-    }
-
-    fn handle_verify(_req: JsonRpcRequest) -> JsonRpcResponse {
+        );
         JsonRpcResponse {
             jsonrpc: "2.0".to_owned(),
-            result: None,
-            error: Some(JsonRpcError {
-                code: -32601,
-                message: "Method not implemented".to_owned(),
-            }),
-            id: Value::Null,
-        }
-    }
-
-    fn handle_not_supported() -> JsonRpcResponse {
-        JsonRpcResponse {
-            jsonrpc: "2.0".to_owned(),
-            result: None,
-            error: Some(JsonRpcError {
-                code: -32601,
-                message: "Method not found".to_owned(),
-            }),
-            id: Value::Null,
+            result,
+            error: err,
+            id: req.and_then(|r| r.id),
         }
     }
 }
@@ -239,13 +291,13 @@ where
                         Ok(req) => Ok(make_response(handler.handle(req).await)),
                         Err(err) => {
                             error!("Error: {}", err);
-                            Ok(make_response(Self::handle_not_supported()))
+                            Ok(make_response(Self::handle_not_supported(None)))
                         }
                     }
                 }
                 Err(err) => {
                     error!("Error: {}", err);
-                    Ok(make_response(Self::handle_not_supported()))
+                    Ok(make_response(Self::handle_not_supported(None)))
                 }
             }
         };
@@ -258,7 +310,7 @@ where
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
-    pub backend: crate::engine::backend::BackendConfig,
+    pub backend: Option<crate::engine::backend::BackendConfig>,
 }
 
 impl Default for ServerConfig {
@@ -266,7 +318,7 @@ impl Default for ServerConfig {
         ServerConfig {
             host: "127.0.0.1".to_owned(),
             port: 1337,
-            backend: crate::engine::backend::BackendConfig::new(4, [0u8; 32]),
+            backend: None,
         }
     }
 }
@@ -351,6 +403,18 @@ mod tests {
         assert_eq!(raw_request, deserialized.unwrap());
     }
 
+    // #[test]
+    // #[tracing_test::traced_test]
+    // fn test_commit() {
+    //     let raw_request = r#"{\"id\": 0, \"method\": \"commit\", \"params\": {\"poly\": [\"6945DC5C4FF4DA C8A7278C9B8F0D4613320CF87FF947F21AC9BF42327EC19448\", \"68E40C088D827BCCE02CEF34BDC8C12BB025FBEA047BC6C00C0C8C5C925B7FAF\", \"67281FAC164E9348B80693BA30D5D4E311DE5878EB3D20E34A585 07B484B243C\", \"5F7C377DAE6B9D9ABAD75DC15E4FFF9FE7520D1F85224C95F485F44978154C5A\", \"2D85C376A440B6E25C3F7C11559B6A27684023F36C3D7A0ACD7E7D019DE399C7\", \"4A6FB95F0241B3583771E7 99120C87AAE3C843ECDB50A38254A92E198968922F\", \"1005079F96EC412A719FE2E9FA67D421D98FB4DEC4181459E59430F5D502BD2A\", \"64960B8692062DCB01C0FFBAC569478A89AD880ED3C9DF710BED5CE75F484 693\", \"03C2882155A447642BD21FB1CF2553F80955713F09BBBBD9724E2CBFD8B19D41\", \"0AB07FECB59EE3435F6129FCD602CB519E56D7B426941633E37A3B676A24830F\", \"12FA5861459EFFBAE654827D98BFDF EA5545DDF8BB9628579463DA21F17462B5\", \"6A6296A0376D807530DB09DC8BB069FFDEC3D7541497B82C722A199D6B7C5B06\", \"153D2C81B54D7E1C3E83EA61C7F66FD88155F1713EE581E2BE8438CA9FEE1A02\", \ "216BCCC4AE97FE3E1D4B21C375C46140FA153E7868201A43480889047ACD0C2D\", \"381BD4FE924EB10E08F2A227D3DB2083AA0E5A1F661CD3C702C4B8A9385E7839\", \"723A7640FD7E65473131563AB5514916AC861C 2695CE6513E5061E597E5E1A81\"#;
+    //     let serialized = serde_json::from_str::<JsonRpcRequest>(raw_request);
+    //     assert!(serialized.is_ok());
+    //     info!("Request: {:?}", serialized.unwrap());
+    //     let cfg = crate::engine::backend::BackendConfig::new(4, [0u8; 32]);
+    //     let handler =
+    //         RpcHandler::new(Arc::new(crate::engine::arkworks::ArkworksBackend::new(cfg)));
+
+
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn test_rpc_handler_all_methods() {
@@ -362,8 +426,9 @@ mod tests {
             let raw_request = format!(r#"{{"jsonrpc":"2.0","method":"{}","id":1}}"#, method);
             let req = serde_json::from_str::<JsonRpcRequest>(&raw_request).unwrap();
             let cfg = crate::engine::backend::BackendConfig::new(4, [0u8; 32]);
+
             let handler =
-                RpcHandler::new(Arc::new(crate::engine::arkworks::ArkworksBackend::new(cfg)));
+                RpcHandler::new(Arc::new(crate::engine::arkworks::ArkworksBackend::new(Some(cfg))));
             let res = handler.handle(req).await;
             if res.result.is_some() {
                 // assert_eq!(
@@ -378,7 +443,7 @@ mod tests {
 
         test_method("ping", Some("pong"), None).await;
         test_method("commit", None, Some("Method not implemented")).await;
-        test_method("prove", None, Some("Method not implemented")).await;
+        test_method("open", None, Some("Method not implemented")).await;
         test_method("verify", None, Some("Method not implemented")).await;
         test_method("any", None, Some("Method not found")).await;
     }
@@ -413,7 +478,7 @@ mod tests {
         let server = Server::new(ServerConfig {
             host: ADDRESS.to_owned(),
             port: PORT,
-            backend: crate::engine::backend::BackendConfig::new(4, [0u8; 32]),
+            backend: None,
         });
         tokio::spawn(async move {
             server.run::<Backend>().await.unwrap();
