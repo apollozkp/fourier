@@ -54,6 +54,15 @@ client.open(poly=poly, x=x)
 # {'jsonrpc': '2.0', 'result': {'proof': '123...efg'}, 'id': 1}
 ```
 
+### RandomPoly
+Generate a random polynomial.
+```python
+# degree of polynomial
+degree = 10
+client.random_poly(degree=degree)
+# {'jsonrpc': '2.0', 'result': {'poly': ['123...efg', ..., '123...efg']}, 'id': 1}
+```
+
 ### Verify
 Verify a proof of polynomial at a point.
 ```python
