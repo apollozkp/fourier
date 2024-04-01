@@ -38,6 +38,11 @@ class RPCRequest:
         params = {"proof": proof, "x": x, "y": y, "commitment": commitment}
         return RPCRequest(method="verify", params=params)
 
+    @staticmethod
+    def random_poly(degree):
+        params = {"degree": degree}
+        return RPCRequest(method="randomPoly", params=params)
+
 
 class Client:
     def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT):
@@ -110,6 +115,12 @@ class Client:
         resp = requests.post(self.endpoint(), data=req.json())
         return resp
 
+    # Generate a random polynomial
+    def random_poly(self, degree: int) -> requests.Response:
+        req = RPCRequest.random_poly(degree)
+        resp = requests.post(self.endpoint(), data=req.json())
+        return resp
+
 
 def commit(rpc, poly):
     with rpc.commit(poly) as resp:
@@ -136,6 +147,23 @@ def verify(rpc, proof, x, y, commitment):
             print(f"Error: {data.get('error')}")
         return data.get("result", {}).get("valid")
     return None
+
+
+def random_poly(rpc, degree):
+    with rpc.random_poly(degree) as resp:
+        data = resp.json()
+        if data.get("error"):
+            print(f"Error: {data.get('error')}")
+        return data.get("result", {}).get("poly")
+    return None
+
+
+def test_random_poly(rpc, degree):
+    poly = random_poly(rpc, degree)
+    if not poly:
+        print("Failed to generate random polynomial.")
+        return
+    assert len(poly) == degree + 1
 
 
 def test_pipeline(rpc, poly, x, y, expected_commitment=None, expected_proof=None):
@@ -205,5 +233,7 @@ if __name__ == "__main__":
         expected_commitment=TEST_COMMITMENT,
         expected_proof=TEST_PROOF,
     )
+
+    test_random_poly(rpc, 10)
 
     rpc.stop()

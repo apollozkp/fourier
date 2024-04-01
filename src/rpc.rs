@@ -1,7 +1,7 @@
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Buf, Bytes};
 use hyper::Response;
-use kzg::G1;
+use kzg::{Fr, Poly, G1};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::future::Future;
@@ -51,6 +51,9 @@ pub enum JsonRpcParams {
     Commit {
         poly: Vec<String>,
     },
+    RandomPoly {
+        degree: usize,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -69,6 +72,7 @@ pub enum JsonRpcResult {
     Commit { commitment: String },
     Open { proof: String },
     Verify { valid: bool },
+    RandomPoly { poly: Vec<String> },
     Pong,
 }
 
@@ -91,6 +95,9 @@ pub enum Method {
 
     #[serde(rename = "verify")]
     Verify,
+
+    #[serde(rename = "randomPoly")]
+    RandomPoly,
 
     #[serde(other)]
     NotSupported,
@@ -128,6 +135,7 @@ where
             Method::Commit => self.handle_commit(req),
             Method::Open => self.handle_open(req),
             Method::Verify => self.handle_verify(req),
+            Method::RandomPoly => self.handle_random_poly(req),
             Method::NotSupported => Self::handle_not_supported(Some(req)),
         }
     }
@@ -239,6 +247,29 @@ where
                     }),
                 ),
             }
+        } else {
+            (
+                None,
+                Some(JsonRpcError {
+                    code: -32602,
+                    message: "Invalid params".to_owned(),
+                }),
+            )
+        };
+        req.response(result, err)
+    }
+
+    fn handle_random_poly(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let (result, err) = if let Some(JsonRpcParams::RandomPoly { degree }) = req.params {
+            (Some(JsonRpcResult::RandomPoly {
+                poly: self
+                    .backend
+                    .random_poly(degree)
+                    .get_coeffs()
+                    .iter()
+                    .map(|x| hex::encode(x.to_bytes()))
+                    .collect(),
+            }), None)
         } else {
             (
                 None,

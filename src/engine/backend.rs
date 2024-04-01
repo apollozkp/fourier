@@ -45,6 +45,8 @@ pub trait Backend {
     fn parse_point_from_str(&self, s: &str) -> Result<Self::Fr, String>;
     fn parse_g1_from_str(&self, s: &str) -> Result<Self::G1, String>;
     fn default() -> BackendConfig;
+
+    fn random_poly(&self, degree: usize) -> Self::Poly;
 }
 
 #[derive(Debug, Clone)]

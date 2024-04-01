@@ -88,6 +88,14 @@ impl crate::engine::backend::Backend for ArkworksBackend {
     fn parse_g1_from_str(&self, s: &str) -> Result<Self::G1, String> {
         G1::from_bytes(hex::decode(s).map_err(|e| e.to_string())?.as_slice())
     }
+
+    fn random_poly(&self, degree: usize) -> Self::Poly {
+        let mut poly = rust_kzg_arkworks::utils::PolyData::new(degree + 1);
+        for i in 0..degree + 1 {
+            poly.set_coeff_at(i, &Self::Fr::rand());
+        }
+        poly
+    }
 }
 
 #[cfg(test)]
