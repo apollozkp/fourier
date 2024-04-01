@@ -6,7 +6,7 @@ import requests
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 1337
-DEFAULT_BIN = "target/debug/fourier"
+DEFAULT_BIN = "target/release/fourier"
 
 
 class RPCRequest:
