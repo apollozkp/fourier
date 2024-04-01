@@ -315,6 +315,16 @@ pub struct ServerConfig {
     pub backend: Option<crate::engine::backend::BackendConfig>,
 }
 
+impl ServerConfig {
+    pub fn new(port: u16) -> Self {
+        ServerConfig {
+            host: "127.0.0.1".to_owned(),
+            port,
+            backend: None,
+        }
+    }
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         ServerConfig {
@@ -375,7 +385,7 @@ impl Server {
     }
 }
 
-pub async fn start_rpc_server<B>()
+pub async fn start_rpc_server<B>(port: u16)
 where
     B: crate::engine::backend::Backend + Send + Sync + 'static,
 {
@@ -384,7 +394,7 @@ where
         .with_writer(std::io::stdout)
         .init();
     info!("Starting RPC server...");
-    let config = ServerConfig::default();
+    let config = ServerConfig::new(port);
     let server = Server::new(config);
     server.run::<B>().await.unwrap();
 }

@@ -4,10 +4,9 @@ import time
 
 import requests
 
-ADDRESS = "127.0.0.1"
-RECV_PORT = 1337
-
-RUST_BIN = "target/debug/fourier"
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 1337
+DEFAULT_BIN = "target/debug/fourier"
 
 
 class RPCRequest:
@@ -41,24 +40,23 @@ class RPCRequest:
 
 
 class Client:
-    def __init__(self, address=ADDRESS, port=RECV_PORT):
-        self.address = address
+    def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT):
+        self.host = host
         self.port = port
         self.rust_rpc = None
 
     def endpoint(self):
-        return f"http://{self.address}:{self.port}"
+        return f"http://{self.host}:{self.port}"
 
-    def rpc_cmd(self):
-        return f"./{RUST_BIN} {self.address} {self.port}"
+    def rust_cmd(self):
+        return [f"./{DEFAULT_BIN}", "--host", self.host, "--port", str(self.port)]
 
     def start_rust(self) -> bool:
         if self.rust_rpc is not None:
             print("Rust server is already running.")
             return False
 
-        cmd = f"./{RUST_BIN}"
-        self.rust_rpc = subprocess.Popen(cmd)
+        self.rust_rpc = subprocess.Popen(args=self.rust_cmd())
 
         if self.rust_rpc is None:
             print("Failed to start Rust server.")
@@ -169,7 +167,9 @@ def test_pipeline(rpc, poly, x, y, expected_commitment=None, expected_proof=None
 
 
 if __name__ == "__main__":
-    rpc = Client()
+    HOST = "localhost"
+    PORT = 1338
+    rpc = Client(host=HOST, port=PORT)
     rpc.start()
     TEST_POLY = [
         "6945DC5C4FF4DAC8A7278C9B8F0D4613320CF87FF947F21AC9BF42327EC19448",
