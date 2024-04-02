@@ -6,8 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-kzg = { path = "../rust-kzg/kzg" }
-rust-kzg-arkworks = { path = "../rust-kzg/arkworks" }
+kzg = { git = "https://github.com/grandinetech/rust-kzg.git" }
+rust-kzg-arkworks = { git = "https://github.com/grandinetech/rust-kzg.git" }
 
 # rpc
 tokio = { version = "1.37", features = ["macros", "full"] }

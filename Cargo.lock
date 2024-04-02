@@ -757,6 +757,7 @@ dependencies = [
 [[package]]
 name = "kzg"
 version = "0.1.0"
+source = "git+https://github.com/grandinetech/rust-kzg.git#1c9f4435a32f5ad7ffb73e299a33b212340fe86b"
 dependencies = [
  "blst",
  "sha2",
@@ -1195,6 +1196,7 @@ dependencies = [
 [[package]]
 name = "rust-kzg-arkworks"
 version = "0.1.0"
+source = "git+https://github.com/grandinetech/rust-kzg.git#1c9f4435a32f5ad7ffb73e299a33b212340fe86b"
 dependencies = [
  "ark-bls12-381",
  "ark-ec",
