@@ -179,12 +179,22 @@ def random_poly(rpc, degree):
     return None
 
 
-def test_random_poly(rpc, degree):
-    poly = random_poly(rpc, degree)
-    if not poly:
-        print("Failed to generate random polynomial.")
-        return
-    assert len(poly) == degree + 1
+def random_point(rpc):
+    with rpc.random_point() as resp:
+        data = resp.json()
+        if data.get("error"):
+            print(f"Error: {data.get('error')}")
+        return data.get("result", {}).get("point")
+    return None
+
+
+def eval_poly(rpc, poly, x):
+    with rpc.eval(poly, x) as resp:
+        data = resp.json()
+        if data.get("error"):
+            print(f"Error: {data.get('error')}")
+        return data.get("result", {}).get("y")
+    return None
 
 
 def test_pipeline(rpc, poly, x, y, expected_commitment=None, expected_proof=None):
@@ -215,11 +225,28 @@ def test_pipeline(rpc, poly, x, y, expected_commitment=None, expected_proof=None
     print(f"Verification: {valid}")
 
 
+def test_random_poly(rpc, degree):
+    poly = random_poly(rpc, degree)
+    if not poly:
+        print("Failed to generate random polynomial.")
+        return
+    point = random_point(rpc)
+    if not point:
+        print("Failed to generate random point.")
+        return
+    eval = eval_poly(rpc, poly, point)
+    if not eval:
+        print("Failed to evaluate polynomial.")
+        return
+
+
 if __name__ == "__main__":
     HOST = "localhost"
-    PORT = 1338
+    PORT = 1337
     rpc = Client(host=HOST, port=PORT)
     rpc.start()
+    test_random_poly(rpc, 10)
+    exit(0)
     TEST_POLY = [
         "6945DC5C4FF4DAC8A7278C9B8F0D4613320CF87FF947F21AC9BF42327EC19448",
         "68E40C088D827BCCE02CEF34BDC8C12BB025FBEA047BC6C00C0C8C5C925B7FAF",

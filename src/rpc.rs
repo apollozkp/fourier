@@ -55,10 +55,6 @@ pub enum JsonRpcParams {
         degree: usize,
     },
     RandomPoint,
-    Evaluate {
-        poly: Vec<String>,
-        x: String,
-    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -79,7 +75,7 @@ pub enum JsonRpcResult {
     Verify { valid: bool },
     RandomPoly { poly: Vec<String> },
     RandomPoint { point: String },
-    Evaluate { result: String },
+    Evaluate { y: String },
     Pong,
 }
 
@@ -301,27 +297,19 @@ where
     }
 
     fn handle_random_point(&self, req: JsonRpcRequest) -> JsonRpcResponse {
-        let (result, err) = if let Some(JsonRpcParams::RandomPoint) = req.params {
-            (
-                Some(JsonRpcResult::RandomPoint {
-                    point: hex::encode(self.backend.random_point().to_bytes()),
-                }),
-                None,
-            )
-        } else {
-            (
-                None,
-                Some(JsonRpcError {
-                    code: -32602,
-                    message: "Invalid params".to_owned(),
-                }),
-            )
-        };
-        req.response(result, err)
+        req.response(
+            Some(JsonRpcResult::RandomPoint {
+                point: hex::encode(self.backend.random_point().to_bytes()),
+            }),
+            None,
+        )
     }
 
     fn handle_evaluate(&self, req: JsonRpcRequest) -> JsonRpcResponse {
-        let (result, err) = if let Some(JsonRpcParams::Evaluate { ref poly, ref x }) = req.params {
+        info!("Handling evaluate request{:?}", req);
+        // TODO: This is gross, params are matched to Open since the enum is untagged
+        // and the Open variant is the first one. This should be fixed.
+        let (result, err) = if let Some(JsonRpcParams::Open { ref poly, ref x }) = req.params {
             match (|| {
                 Ok((
                     self.backend.parse_poly_from_str(poly)?,
@@ -330,7 +318,7 @@ where
             })() {
                 Ok((poly, x)) => (
                     Some(JsonRpcResult::Evaluate {
-                        result: hex::encode(
+                        y: hex::encode(
                             self.backend.evaluate(&poly, x).to_bytes(),
                         ),
                     }),
