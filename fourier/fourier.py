@@ -43,6 +43,15 @@ class RPCRequest:
         params = {"degree": degree}
         return RPCRequest(method="randomPoly", params=params)
 
+    @staticmethod
+    def random_point():
+        return RPCRequest(method="randomPoint")
+
+    @staticmethod
+    def evaluate(poly, x):
+        params = {"poly": poly, "x": x}
+        return RPCRequest(method="evaluate", params=params)
+
 
 class Client:
     def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT):
@@ -118,6 +127,18 @@ class Client:
     # Generate a random polynomial
     def random_poly(self, degree: int) -> requests.Response:
         req = RPCRequest.random_poly(degree)
+        resp = requests.post(self.endpoint(), data=req.json())
+        return resp
+
+    # Generate a random point
+    def random_point(self) -> requests.Response:
+        req = RPCRequest.random_point()
+        resp = requests.post(self.endpoint(), data=req.json())
+        return resp
+
+    # Evaluate a polynomial
+    def eval(self, poly: str, x: str) -> requests.Response:
+        req = RPCRequest.evaluate(poly, x)
         resp = requests.post(self.endpoint(), data=req.json())
         return resp
 

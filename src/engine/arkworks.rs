@@ -96,6 +96,14 @@ impl crate::engine::backend::Backend for ArkworksBackend {
         }
         poly
     }
+
+    fn random_point(&self) -> Self::Fr {
+        Self::Fr::rand()
+    }
+
+    fn evaluate(&self, poly: &Self::Poly, x: Self::Fr) -> Self::Fr {
+        poly.eval(&x)
+    }
 }
 
 #[cfg(test)]

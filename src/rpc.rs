@@ -54,6 +54,11 @@ pub enum JsonRpcParams {
     RandomPoly {
         degree: usize,
     },
+    RandomPoint,
+    Evaluate {
+        poly: Vec<String>,
+        x: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,6 +78,8 @@ pub enum JsonRpcResult {
     Open { proof: String },
     Verify { valid: bool },
     RandomPoly { poly: Vec<String> },
+    RandomPoint { point: String },
+    Evaluate { result: String },
     Pong,
 }
 
@@ -98,6 +105,12 @@ pub enum Method {
 
     #[serde(rename = "randomPoly")]
     RandomPoly,
+
+    #[serde(rename = "randomPoint")]
+    RandomPoint,
+
+    #[serde(rename = "evaluate")]
+    Evaluate,
 
     #[serde(other)]
     NotSupported,
@@ -136,6 +149,8 @@ where
             Method::Open => self.handle_open(req),
             Method::Verify => self.handle_verify(req),
             Method::RandomPoly => self.handle_random_poly(req),
+            Method::RandomPoint => self.handle_random_point(req),
+            Method::Evaluate => self.handle_evaluate(req),
             Method::NotSupported => Self::handle_not_supported(Some(req)),
         }
     }
@@ -261,15 +276,74 @@ where
 
     fn handle_random_poly(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         let (result, err) = if let Some(JsonRpcParams::RandomPoly { degree }) = req.params {
-            (Some(JsonRpcResult::RandomPoly {
-                poly: self
-                    .backend
-                    .random_poly(degree)
-                    .get_coeffs()
-                    .iter()
-                    .map(|x| hex::encode(x.to_bytes()))
-                    .collect(),
-            }), None)
+            (
+                Some(JsonRpcResult::RandomPoly {
+                    poly: self
+                        .backend
+                        .random_poly(degree)
+                        .get_coeffs()
+                        .iter()
+                        .map(|x| hex::encode(x.to_bytes()))
+                        .collect(),
+                }),
+                None,
+            )
+        } else {
+            (
+                None,
+                Some(JsonRpcError {
+                    code: -32602,
+                    message: "Invalid params".to_owned(),
+                }),
+            )
+        };
+        req.response(result, err)
+    }
+
+    fn handle_random_point(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let (result, err) = if let Some(JsonRpcParams::RandomPoint) = req.params {
+            (
+                Some(JsonRpcResult::RandomPoint {
+                    point: hex::encode(self.backend.random_point().to_bytes()),
+                }),
+                None,
+            )
+        } else {
+            (
+                None,
+                Some(JsonRpcError {
+                    code: -32602,
+                    message: "Invalid params".to_owned(),
+                }),
+            )
+        };
+        req.response(result, err)
+    }
+
+    fn handle_evaluate(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let (result, err) = if let Some(JsonRpcParams::Evaluate { ref poly, ref x }) = req.params {
+            match (|| {
+                Ok((
+                    self.backend.parse_poly_from_str(poly)?,
+                    self.backend.parse_point_from_str(x)?,
+                ))
+            })() {
+                Ok((poly, x)) => (
+                    Some(JsonRpcResult::Evaluate {
+                        result: hex::encode(
+                            self.backend.evaluate(&poly, x).to_bytes(),
+                        ),
+                    }),
+                    None,
+                ),
+                Err(err) => (
+                    None,
+                    Some(JsonRpcError {
+                        code: -32000,
+                        message: err,
+                    }),
+                ),
+            }
         } else {
             (
                 None,

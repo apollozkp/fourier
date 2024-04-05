@@ -47,6 +47,8 @@ pub trait Backend {
     fn default() -> BackendConfig;
 
     fn random_poly(&self, degree: usize) -> Self::Poly;
+    fn random_point(&self) -> Self::Fr;
+    fn evaluate(&self, poly: &Self::Poly, x: Self::Fr) -> Self::Fr;
 }
 
 #[derive(Debug, Clone)]
