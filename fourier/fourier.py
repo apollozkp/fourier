@@ -52,6 +52,11 @@ class RPCRequest:
         params = {"poly": poly, "x": x}
         return RPCRequest(method="evaluate", params=params)
 
+    @staticmethod
+    def prove(poly):
+        params = {"poly": poly}
+        return RPCRequest(method="prove", params=params)
+
 
 class Client:
     def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT):
@@ -142,6 +147,14 @@ class Client:
         resp = requests.post(self.endpoint(), data=req.json())
         return resp
 
+    # Prove a polynomial
+    # This is a combinatory method, and performs a commitment and an opening on a randomly generated point.
+    # This method provides convenience for miners and simplifies the code.
+    def prove(self, poly: str) -> requests.Response:
+        req = RPCRequest.prove(poly)
+        resp = requests.post(self.endpoint(), data=req.json())
+        return resp
+
 
 def commit(rpc, poly):
     with rpc.commit(poly) as resp:
@@ -196,6 +209,14 @@ def eval_poly(rpc, poly, x):
         return data.get("result", {}).get("y")
     return None
 
+def prove(rpc, poly):
+    with rpc.prove(poly) as resp:
+        data = resp.json()
+        if data.get("error"):
+            print(f"Error: {data.get('error')}")
+        return data.get("result", {}).get("commitment"), data.get("result", {}).get("y"), data.get("result", {}).get("x"), data.get("result", {}).get("proof")
+    return None
+
 
 def test_pipeline(rpc, poly, x, y, expected_commitment=None, expected_proof=None):
     commitment = commit(rpc, poly)
@@ -224,6 +245,13 @@ def test_pipeline(rpc, poly, x, y, expected_commitment=None, expected_proof=None
         return
     print(f"Verification: {valid}")
 
+    commitment, y, x, proof = prove(rpc, poly)
+    valid = verify(rpc, proof, x, y, commitment)
+    if not valid:
+        print("Failed to make a valid proof from a polynomial.")
+        return
+    print(f"Prove: {commitment}, {y}, {x}, {proof}")
+
 
 def test_random_poly(rpc, degree):
     poly = random_poly(rpc, degree)
@@ -245,8 +273,7 @@ if __name__ == "__main__":
     PORT = 1337
     rpc = Client(host=HOST, port=PORT)
     rpc.start()
-    test_random_poly(rpc, 10)
-    exit(0)
+
     TEST_POLY = [
         "6945DC5C4FF4DAC8A7278C9B8F0D4613320CF87FF947F21AC9BF42327EC19448",
         "68E40C088D827BCCE02CEF34BDC8C12BB025FBEA047BC6C00C0C8C5C925B7FAF",

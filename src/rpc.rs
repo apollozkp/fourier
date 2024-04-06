@@ -70,12 +70,30 @@ struct JsonRpcResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum JsonRpcResult {
-    Commit { commitment: String },
-    Open { proof: String },
-    Verify { valid: bool },
-    RandomPoly { poly: Vec<String> },
-    RandomPoint { point: String },
-    Evaluate { y: String },
+    Commit {
+        commitment: String,
+    },
+    Open {
+        proof: String,
+    },
+    Verify {
+        valid: bool,
+    },
+    RandomPoly {
+        poly: Vec<String>,
+    },
+    RandomPoint {
+        point: String,
+    },
+    Evaluate {
+        y: String,
+    },
+    Prove {
+        commitment: String,
+        y: String,
+        x: String,
+        proof: String,
+    },
     Pong,
 }
 
@@ -107,6 +125,9 @@ pub enum Method {
 
     #[serde(rename = "evaluate")]
     Evaluate,
+
+    #[serde(rename = "prove")]
+    Prove,
 
     #[serde(other)]
     NotSupported,
@@ -147,6 +168,7 @@ where
             Method::RandomPoly => self.handle_random_poly(req),
             Method::RandomPoint => self.handle_random_point(req),
             Method::Evaluate => self.handle_evaluate(req),
+            Method::Prove => self.handle_prove(req),
             Method::NotSupported => Self::handle_not_supported(Some(req)),
         }
     }
@@ -318,12 +340,56 @@ where
             })() {
                 Ok((poly, x)) => (
                     Some(JsonRpcResult::Evaluate {
-                        y: hex::encode(
-                            self.backend.evaluate(&poly, x).to_bytes(),
-                        ),
+                        y: hex::encode(self.backend.evaluate(&poly, x).to_bytes()),
                     }),
                     None,
                 ),
+                Err(err) => (
+                    None,
+                    Some(JsonRpcError {
+                        code: -32000,
+                        message: err,
+                    }),
+                ),
+            }
+        } else {
+            (
+                None,
+                Some(JsonRpcError {
+                    code: -32602,
+                    message: "Invalid params".to_owned(),
+                }),
+            )
+        };
+        req.response(result, err)
+    }
+
+    fn handle_prove(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let (result, err) = if let Some(JsonRpcParams::Commit { ref poly }) = req.params {
+            match self.backend.parse_poly_from_str(poly) {
+                Ok(poly) => {
+                    let x = Fr::rand();
+                    let y = poly.eval(&x);
+                    (
+                        Some(JsonRpcResult::Prove {
+                            commitment: hex::encode(
+                                self.backend
+                                    .commit_to_poly(poly.clone())
+                                    .unwrap()
+                                    .to_bytes(),
+                            ),
+                            y: hex::encode(y.to_bytes()),
+                            x: hex::encode(x.to_bytes()),
+                            proof: hex::encode(
+                                self.backend
+                                    .compute_proof_single(poly, x)
+                                    .unwrap()
+                                    .to_bytes(),
+                            ),
+                        }),
+                        None,
+                    )
+                }
                 Err(err) => (
                     None,
                     Some(JsonRpcError {
