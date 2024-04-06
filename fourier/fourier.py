@@ -67,15 +67,15 @@ class Client:
     def endpoint(self):
         return f"http://{self.host}:{self.port}"
 
-    def rust_cmd(self):
-        return [f"./{DEFAULT_BIN}", "--host", self.host, "--port", str(self.port)]
+    def rust_cmd(self, default_bin=DEFAULT_BIN):
+        return [f"./{default_bin}", "--host", self.host, "--port", str(self.port)]
 
-    def start_rust(self) -> bool:
+    def start_rust(self, default_bin=DEFAULT_BIN) -> bool:
         if self.rust_rpc is not None:
             print("Rust server is already running.")
             return False
 
-        self.rust_rpc = subprocess.Popen(args=self.rust_cmd())
+        self.rust_rpc = subprocess.Popen(args=self.rust_cmd(default_bin))
 
         if self.rust_rpc is None:
             print("Failed to start Rust server.")
@@ -92,8 +92,8 @@ class Client:
         self.rust_rpc = None
         return True
 
-    def start(self):
-        if not self.start_rust():
+    def start(self, default_bin=DEFAULT_BIN):
+        if not self.start_rust(default_bin):
             return False
         if not self.ping().ok:
             print("Failed to ping Rust server.")
