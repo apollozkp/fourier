@@ -26,7 +26,7 @@ pub trait Backend {
         secret: [u8; 32usize],
     ) -> (Vec<Self::G1>, Vec<Self::G2>);
 
-    fn new(cfg: Option<BackendConfig>, g1_g2: Option<String>) -> Self;
+    fn new(cfg: Option<BackendConfig>) -> Self;
 
     fn commit_to_poly(&self, poly: Self::Poly) -> Result<Self::G1, String>;
 
@@ -43,20 +43,21 @@ pub trait Backend {
     fn parse_poly_from_str(&self, s: &[String]) -> Result<Self::Poly, String>;
     fn parse_point_from_str(&self, s: &str) -> Result<Self::Fr, String>;
     fn parse_g1_from_str(&self, s: &str) -> Result<Self::G1, String>;
-    fn default() -> BackendConfig;
+    fn default_config() -> BackendConfig;
 
     fn random_poly(&self, degree: usize) -> Self::Poly;
     fn random_point(&self) -> Self::Fr;
     fn evaluate(&self, poly: &Self::Poly, x: Self::Fr) -> Self::Fr;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BackendConfig {
-    pub scale: usize,
+    pub scale: Option<usize>,
+    pub path: Option<String>,
 }
 
 impl BackendConfig {
-    pub fn new(scale: usize) -> Self {
-        Self { scale }
+    pub fn new(scale: Option<usize>, path: Option<String>) -> Self {
+        Self { scale, path }
     }
 }

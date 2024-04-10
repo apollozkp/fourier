@@ -5,10 +5,82 @@ use kzg::{FFTSettings, Fr, KZGSettings, Poly, G1};
 use rand::Rng;
 use rust_kzg_arkworks::kzg_types::{ArkG1, ArkG2};
 use std::io::Read;
+use tracing::{debug, info};
+use rayon::prelude::*;
 
 pub struct ArkworksBackend {
     pub fft_settings: rust_kzg_arkworks::kzg_proofs::FFTSettings,
     pub kzg_settings: rust_kzg_arkworks::kzg_proofs::KZGSettings,
+}
+
+impl ArkworksBackend {
+    fn new_from_file(path: &str) -> Result<(Vec<ArkG1>, Vec<ArkG2>), String> {
+        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let mut reader = std::io::BufReader::new(file);
+
+        let mut g1_size_bytes = [0u8; 8];
+        reader
+            .read_exact(&mut g1_size_bytes)
+            .map_err(|e| e.to_string())?;
+        let g1_size = u64::from_le_bytes(g1_size_bytes);
+        debug!("read g1_size: {:?}", g1_size);
+
+        let g1_raw =
+            (0..g1_size as usize).try_fold(Vec::with_capacity(g1_size as usize), |mut acc, _| {
+                let mut g1_bytes = [0u8; 48];
+                match reader.read_exact(&mut g1_bytes) {
+                    Ok(_) => (),
+                    Err(e) => return Err(e.to_string()),
+                }
+                acc.push(g1_bytes);
+                Ok(acc)
+            })?;
+
+        let mut g2_size_bytes = [0u8; 8];
+        reader
+            .read_exact(&mut g2_size_bytes)
+            .map_err(|e| e.to_string())?;
+        let g2_size = u64::from_le_bytes(g2_size_bytes);
+        debug!("read g2_size: {:?}", g2_size);
+
+        let g2_raw =
+            (0..g2_size as usize).try_fold(Vec::with_capacity(g2_size as usize), |mut acc, _| {
+                let mut g2_bytes = [0u8; 96];
+                match reader.read_exact(&mut g2_bytes) {
+                    Ok(_) => (),
+                    Err(e) => return Err(e.to_string()),
+                }
+                acc.push(g2_bytes);
+                Ok(acc)
+            })?;
+
+        let cores = num_cpus::get();
+        debug!("splitting work over {} cores", cores);
+
+        debug!("parsing g1...");
+        let chunk_size = g1_size as usize / cores;
+        let g1 = g1_raw.par_chunks(chunk_size).map(|chunk| {
+            debug!("parsing chunk with size: {}", chunk.len());
+            chunk.iter().map(|x| {
+                let g1_el = G1Affine::deserialize_compressed_unchecked(x.as_slice()).unwrap();
+                ArkG1(g1_el.into_group())
+            }).collect::<Vec<_>>()
+        }).flatten().collect::<Vec<_>>();
+
+        debug!("parsing g2...");
+        let chunk_size = g2_size as usize / cores;
+        let g2 = g2_raw.par_chunks(chunk_size).map(|chunk| {
+            debug!("parsing chunk with size: {}", chunk.len());
+            chunk.iter().map(|x| {
+                let g2_el = G2Affine::deserialize_compressed_unchecked(x.as_slice()).unwrap();
+                ArkG2(g2_el.into_group())
+            }).collect::<Vec<_>>()
+        }).flatten().collect::<Vec<_>>();
+
+        debug!("done parsing from file");
+        Ok((g1, g2))
+
+    }
 }
 
 impl crate::engine::backend::Backend for ArkworksBackend {
@@ -30,53 +102,29 @@ impl crate::engine::backend::Backend for ArkworksBackend {
         rust_kzg_arkworks::kzg_proofs::generate_trusted_setup(max_width, secret)
     }
 
-    fn default() -> crate::engine::backend::BackendConfig {
-        crate::engine::backend::BackendConfig::new(Self::SCALE)
+    fn default_config() -> crate::engine::backend::BackendConfig {
+        crate::engine::backend::BackendConfig::new(Some(Self::SCALE), None)
     }
 
-    fn new(cfg: Option<crate::engine::backend::BackendConfig>, g1_g2: Option<String>) -> Self {
-        let scale = match cfg {
-            Some(cfg) => cfg.scale,
-            None => Self::SCALE,
-        };
+    fn new(cfg: Option<crate::engine::backend::BackendConfig>) -> Self {
+        info!("Creating new ArkworksBackend...");
+        let scale = cfg
+            .as_ref()
+            .and_then(|cfg| cfg.scale)
+            .unwrap_or(Self::SCALE);
         let fft_settings = rust_kzg_arkworks::kzg_proofs::FFTSettings::new(scale)
             .expect("Failed to create FFTSettings");
 
-        let (s1, s2) = if let Some(path) = g1_g2 {
-            let mut file = std::fs::File::open(path).unwrap();
-            let mut g1_size_bytes = [0u8; 8];
-            file.read_exact(&mut g1_size_bytes).unwrap();
-            let g1_size = u64::from_le_bytes(g1_size_bytes);
-            let mut g1 = Vec::with_capacity(g1_size as usize);
-            for _ in 0..g1_size {
-                let mut g1_bytes = [0u8; 48];
-                file.read_exact(&mut g1_bytes).unwrap();
-                let g1_el =
-                    G1Affine::deserialize_compressed_unchecked(g1_bytes.as_slice()).unwrap();
-                let g1_el = ArkG1(g1_el.into_group());
-                g1.push(g1_el);
-            }
-
-            let mut g2_size_bytes = [0u8; 8];
-            file.read_exact(&mut g2_size_bytes).unwrap();
-            let g2_size = u64::from_le_bytes(g2_size_bytes);
-            let mut g2 = Vec::with_capacity(g2_size as usize);
-            for _ in 0..g2_size {
-                let mut g2_bytes = [0u8; 96];
-                file.read_exact(&mut g2_bytes).unwrap();
-                let g2_el =
-                    G2Affine::deserialize_compressed_unchecked(g2_bytes.as_slice()).unwrap();
-                let g2_el = ArkG2(g2_el.into_group());
-                g2.push(g2_el);
-            }
-
-            println!("reading");
-            (g1, g2)
+        let (s1, s2) = if let Some(path) = cfg.as_ref().and_then(|cfg| cfg.path.as_ref()) {
+            info!("Reading setup from file");
+            Self::new_from_file(path).expect("Failed to read setup from file")
         } else {
+            info!("No setup file provided, generating new setup");
             let secret: [u8; 32] = rand::thread_rng().gen();
             Self::generate_trusted_setup(fft_settings.get_max_width(), secret)
         };
 
+        info!("Creating KZGSettings...");
         let kzg_settings = rust_kzg_arkworks::kzg_proofs::KZGSettings::new(
             &s1,
             &s2,
@@ -84,7 +132,7 @@ impl crate::engine::backend::Backend for ArkworksBackend {
             &fft_settings,
         )
         .expect("Failed to create KZGSettings");
-        println!("DONE");
+        info!("Created new ArkworksBackend");
         Self {
             fft_settings,
             kzg_settings,
@@ -197,8 +245,8 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_arkworks_backend() {
-        let cfg = crate::engine::backend::BackendConfig::new(4);
-        let backend = ArkworksBackend::new(Some(cfg.clone()), None);
+        let cfg = crate::engine::backend::BackendConfig::new(Some(4), None);
+        let backend = ArkworksBackend::new(Some(cfg.clone()));
         let poly = backend.random_poly();
         tracing::info!("poly: {:?}", poly.clone());
         let x = backend.random_fr();
@@ -213,8 +261,8 @@ mod tests {
 
     #[test]
     fn test_arkworks_g1_serialize_deserialize() {
-        let cfg = crate::engine::backend::BackendConfig::new(4);
-        let backend = ArkworksBackend::new(Some(cfg.clone()), None);
+        let cfg = crate::engine::backend::BackendConfig::new(Some(4), None);
+        let backend = ArkworksBackend::new(Some(cfg.clone()));
         let g1 = backend.random_g1();
         println!("g1: {:?}", g1);
         let g1_bytes = g1.to_bytes();
@@ -225,8 +273,8 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_pipeline() {
-        let cfg = crate::engine::backend::BackendConfig::new(4);
-        let backend = ArkworksBackend::new(Some(cfg.clone()), Some("setup".to_owned()));
+        let cfg = crate::engine::backend::BackendConfig::new(Some(4), Some("setup".to_string()));
+        let backend = ArkworksBackend::new(Some(cfg.clone()));
 
         // Get hardcoded poly
         let poly = backend
@@ -273,29 +321,33 @@ mod tests {
         assert!(result);
     }
 
-    // #[test]
-    // fn write_setup() {
-    //     use kzg::G2;
-    //     use std::io::Write;
+    #[test]
+    #[tracing_test::traced_test]
+    fn write_setup() {
+        use kzg::G2;
+        use std::io::Write;
+        use tracing::info;
 
-    //     let cfg = crate::engine::backend::BackendConfig::new(20);
-    //     let backend = ArkworksBackend::new(Some(cfg.clone()), None);
+        info!("Generating setup");
+        let cfg = crate::engine::backend::BackendConfig::new(Some(20), None);
+        let backend = ArkworksBackend::new(Some(cfg.clone()));
 
-    //     let mut file = std::fs::File::create("setup").unwrap();
-    //     let encoded_s1_size = backend.kzg_settings.secret_g1.len() as u64;
-    //     file.write(&encoded_s1_size.to_le_bytes()).unwrap();
+        let mut file = std::fs::File::create("setup").unwrap();
 
-    //     for el in backend.kzg_settings.secret_g1 {
-    //         let bytes = el.to_bytes();
-    //         file.write(&bytes).unwrap();
-    //     }
+        info!("Writing s1");
+        let encoded_s1_size = backend.kzg_settings.secret_g1.len() as u64;
+        Write::write(&mut file, &encoded_s1_size.to_le_bytes()).unwrap();
+        for el in backend.kzg_settings.secret_g1 {
+            let bytes = el.to_bytes();
+            Write::write(&mut file, &bytes).unwrap();
+        }
 
-    //     let encoded_s2_size = backend.kzg_settings.secret_g2.len() as u64;
-    //     file.write(&encoded_s2_size.to_le_bytes()).unwrap();
-
-    //     for el in backend.kzg_settings.secret_g2 {
-    //         let bytes = el.to_bytes();
-    //         file.write(&bytes).unwrap();
-    //     }
-    // }
+        info!("Writing s2");
+        let encoded_s2_size = backend.kzg_settings.secret_g2.len() as u64;
+        Write::write(&mut file, &encoded_s2_size.to_le_bytes()).unwrap();
+        for el in backend.kzg_settings.secret_g2 {
+            let bytes = el.to_bytes();
+            Write::write(&mut file, &bytes).unwrap();
+        }
+    }
 }
