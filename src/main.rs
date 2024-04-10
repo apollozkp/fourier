@@ -1,6 +1,12 @@
 pub mod engine;
 pub mod rpc;
-use tracing::{debug, info};
+use kzg::G1;
+use kzg::G2;
+use std::io::Write;
+use tracing::info;
+
+use crate::engine::backend::Backend as _;
+use crate::engine::{backend::BackendConfig, blst::BlstBackend as Backend};
 
 use clap::Parser;
 
@@ -33,7 +39,7 @@ struct SetupArgs {
 struct RunArgs {
     #[clap(short, long)]
     host: Option<String>,
-    #[clap(short='P', long)]
+    #[clap(short = 'P', long)]
     port: Option<u16>,
     #[clap(short, long)]
     scale: Option<usize>,
@@ -48,14 +54,9 @@ impl RunArgs {
 }
 
 fn write_setup(args: SetupArgs) {
-    use crate::engine::backend::Backend;
-    use kzg::G1;
-    use kzg::G2;
-    use std::io::Write;
-
     info!("Generating setup");
-    let cfg = crate::engine::backend::BackendConfig::new(Some(20), None);
-    let backend = crate::engine::arkworks::ArkworksBackend::new(Some(cfg.clone()));
+    let cfg = BackendConfig::new(Some(20), None);
+    let backend = Backend::new(Some(cfg.clone()));
 
     info!("Writing setup to file");
     let file_path = args.path.unwrap_or("setup".to_string());
@@ -80,7 +81,7 @@ fn write_setup(args: SetupArgs) {
 
 async fn run_server(args: RunArgs) {
     let cfg = args.to_config();
-    rpc::start_rpc_server::<engine::arkworks::ArkworksBackend>(cfg).await;
+    rpc::start_rpc_server::<Backend>(cfg).await;
 }
 
 #[tokio::main]

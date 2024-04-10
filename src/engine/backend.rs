@@ -1,9 +1,6 @@
 use kzg::{FFTSettings, Fr, G1Affine, G1Fp, G1GetFp, G1Mul, KZGSettings, Poly, G1, G2};
 
 pub trait Backend {
-    // TODO: These should probably not be constants, probably should be initialized somehow
-    const SCALE: usize;
-
     type Fr: Fr;
     type G1: G1 + G1Mul<Self::Fr> + G1GetFp<Self::G1Fp>;
     type G2: G2;
@@ -20,11 +17,6 @@ pub trait Backend {
     >;
     type G1Fp: G1Fp;
     type G1Affine: G1Affine<Self::G1, Self::G1Fp>;
-
-    fn generate_trusted_setup(
-        max_width: usize,
-        secret: [u8; 32usize],
-    ) -> (Vec<Self::G1>, Vec<Self::G2>);
 
     fn new(cfg: Option<BackendConfig>) -> Self;
 
@@ -43,7 +35,6 @@ pub trait Backend {
     fn parse_poly_from_str(&self, s: &[String]) -> Result<Self::Poly, String>;
     fn parse_point_from_str(&self, s: &str) -> Result<Self::Fr, String>;
     fn parse_g1_from_str(&self, s: &str) -> Result<Self::G1, String>;
-    fn default_config() -> BackendConfig;
 
     fn random_poly(&self, degree: usize) -> Self::Poly;
     fn random_point(&self) -> Self::Fr;

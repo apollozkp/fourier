@@ -1,21 +1,23 @@
-use ark_bls12_381::{G1Affine, G2Affine};
-use ark_ec::AffineRepr;
-use ark_serialize::CanonicalDeserialize;
-use kzg::{FFTSettings, Fr, KZGSettings, Poly, G1};
+use kzg::{FFTSettings, Fr, KZGSettings, Poly, G1, G2};
 use rand::Rng;
 use rayon::prelude::*;
-use rust_kzg_arkworks::kzg_types::{ArkG1, ArkG2};
+use rust_kzg_blst::types::{
+    g1::FsG1,
+    g2::FsG2,
+};
+use rust_kzg_blst::utils::generate_trusted_setup;
+// use rust_kzg_blst::kzg_types::{FsG1, FsG2};
 use std::io::Read;
 use tracing::{debug, info};
 
-pub struct ArkworksBackend {
-    pub fft_settings: rust_kzg_arkworks::kzg_proofs::FFTSettings,
-    pub kzg_settings: rust_kzg_arkworks::kzg_proofs::KZGSettings,
+pub struct BlstBackend {
+    pub fft_settings: rust_kzg_blst::types::fft_settings::FsFFTSettings,
+    pub kzg_settings: rust_kzg_blst::types::kzg_settings::FsKZGSettings,
 }
 
-impl ArkworksBackend {
+impl BlstBackend {
     const DEFAULT_SCALE: usize = 20;
-    fn new_from_file(path: &str) -> Result<(Vec<ArkG1>, Vec<ArkG2>), String> {
+    fn new_from_file(path: &str) -> Result<(Vec<FsG1>, Vec<FsG2>), String> {
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let mut reader = std::io::BufReader::new(file);
 
@@ -71,9 +73,7 @@ impl ArkworksBackend {
                 chunk
                     .iter()
                     .map(|x| {
-                        let g1_el =
-                            G1Affine::deserialize_compressed_unchecked(x.as_slice()).unwrap();
-                        ArkG1(g1_el.into_group())
+                        FsG1::from_bytes(x.as_slice()).expect("Failed to parse G1")
                     })
                     .collect::<Vec<_>>()
             })
@@ -89,9 +89,7 @@ impl ArkworksBackend {
                 chunk
                     .iter()
                     .map(|x| {
-                        let g2_el =
-                            G2Affine::deserialize_compressed_unchecked(x.as_slice()).unwrap();
-                        ArkG2(g2_el.into_group())
+                        FsG2::from_bytes(x.as_slice()).expect("Failed to parse G2")
                     })
                     .collect::<Vec<_>>()
             })
@@ -102,31 +100,28 @@ impl ArkworksBackend {
         Ok((g1, g2))
     }
 
-    fn generate_trusted_setup(
-        max_width: usize,
-        secret: [u8; 32usize],
-    ) -> (Vec<ArkG1>, Vec<ArkG2>) {
-        rust_kzg_arkworks::kzg_proofs::generate_trusted_setup(max_width, secret)
+    fn generate_trusted_setup(max_width: usize, secret: [u8; 32usize]) -> (Vec<FsG1>, Vec<FsG2>) {
+        generate_trusted_setup(max_width, secret)
     }
 }
 
-impl crate::engine::backend::Backend for ArkworksBackend {
-    type Fr = rust_kzg_arkworks::kzg_types::ArkFr;
-    type G1 = rust_kzg_arkworks::kzg_types::ArkG1;
-    type G2 = rust_kzg_arkworks::kzg_types::ArkG2;
-    type Poly = rust_kzg_arkworks::utils::PolyData;
-    type FFTSettings = rust_kzg_arkworks::kzg_proofs::FFTSettings;
-    type KZGSettings = rust_kzg_arkworks::kzg_proofs::KZGSettings;
-    type G1Fp = rust_kzg_arkworks::kzg_types::ArkFp;
-    type G1Affine = rust_kzg_arkworks::kzg_types::ArkG1Affine;
+impl crate::engine::backend::Backend for BlstBackend {
+    type Fr = rust_kzg_blst::types::fr::FsFr;
+    type G1 = rust_kzg_blst::types::g1::FsG1;
+    type G2 = rust_kzg_blst::types::g2::FsG2;
+    type Poly = rust_kzg_blst::types::poly::FsPoly;
+    type FFTSettings = rust_kzg_blst::types::fft_settings::FsFFTSettings;
+    type KZGSettings = rust_kzg_blst::types::kzg_settings::FsKZGSettings;
+    type G1Fp = rust_kzg_blst::types::fp::FsFp;
+    type G1Affine = rust_kzg_blst::types::g1::FsG1Affine;
 
     fn new(cfg: Option<crate::engine::backend::BackendConfig>) -> Self {
-        info!("Creating new ArkworksBackend...");
+        info!("Creating new FsworksBackend...");
         let scale = cfg
             .as_ref()
             .and_then(|cfg| cfg.scale)
             .unwrap_or(Self::DEFAULT_SCALE);
-        let fft_settings = rust_kzg_arkworks::kzg_proofs::FFTSettings::new(scale)
+        let fft_settings = Self::FFTSettings::new(scale)
             .expect("Failed to create FFTSettings");
 
         let (s1, s2) = if let Some(path) = cfg.as_ref().and_then(|cfg| cfg.path.as_ref()) {
@@ -139,14 +134,14 @@ impl crate::engine::backend::Backend for ArkworksBackend {
         };
 
         info!("Creating KZGSettings...");
-        let kzg_settings = rust_kzg_arkworks::kzg_proofs::KZGSettings::new(
+        let kzg_settings = KZGSettings::new(
             &s1,
             &s2,
             fft_settings.get_max_width(),
             &fft_settings,
         )
         .expect("Failed to create KZGSettings");
-        info!("Created new ArkworksBackend");
+        info!("Created new FsworksBackend");
         Self {
             fft_settings,
             kzg_settings,
@@ -177,7 +172,7 @@ impl crate::engine::backend::Backend for ArkworksBackend {
     }
 
     fn parse_poly_from_str(&self, s: &[String]) -> Result<Self::Poly, String> {
-        Ok(rust_kzg_arkworks::utils::PolyData::from_coeffs(
+        Ok(Self::Poly::from_coeffs(
             &s.iter()
                 .map(|x| Fr::from_bytes(hex::decode(x).map_err(|e| e.to_string())?.as_slice()))
                 .collect::<Result<Vec<Self::Fr>, String>>()?,
@@ -189,7 +184,7 @@ impl crate::engine::backend::Backend for ArkworksBackend {
     }
 
     fn random_poly(&self, degree: usize) -> Self::Poly {
-        let mut poly = rust_kzg_arkworks::utils::PolyData::new(degree + 1);
+        let mut poly = Self::Poly::new(degree + 1);
         for i in 0..degree + 1 {
             poly.set_coeff_at(i, &Self::Fr::rand());
         }
@@ -211,6 +206,10 @@ mod tests {
     use crate::engine::backend::Backend;
     use kzg::Fr;
     use kzg::Poly;
+
+    use rust_kzg_blst::types::fr::FsFr;
+    use rust_kzg_blst::types::g1::FsG1;
+    use rust_kzg_blst::types::poly::FsPoly;
 
     const TEST_POLY: [&str; 16] = [
         "6945DC5C4FF4DAC8A7278C9B8F0D4613320CF87FF947F21AC9BF42327EC19448",
@@ -237,22 +236,21 @@ mod tests {
     const EXPECTED_COMMITMENT: &str =  "8424fb9dc224ab79efccf6710edea3b936d03bbd323f052bb9c4b2efe9f98239e7c3e48148f243065cee910054a10e71";
     const EXPECTED_PROOF: &str = "895cdfe1bf26bbf10bdc0d90178ec89635269cca7c9b39836a76e91689ad3fa4d1772f8d60cdd86cd4bfd1dedbdec81d";
 
-    impl ArkworksBackend {
-        pub fn random_poly(&self) -> rust_kzg_arkworks::utils::PolyData {
-            let mut poly =
-                rust_kzg_arkworks::utils::PolyData::new(self.fft_settings.get_max_width());
+    impl BlstBackend {
+        pub fn random_poly(&self) -> FsPoly {
+            let mut poly = FsPoly::new(self.fft_settings.get_max_width());
             for i in 0..self.fft_settings.get_max_width() {
                 poly.set_coeff_at(i, &Fr::rand());
             }
             poly
         }
 
-        pub fn random_fr(&self) -> rust_kzg_arkworks::kzg_types::ArkFr {
-            rust_kzg_arkworks::kzg_types::ArkFr::rand()
+        pub fn random_fr(&self) -> FsFr {
+            FsFr::rand()
         }
 
-        pub fn random_g1(&self) -> rust_kzg_arkworks::kzg_types::ArkG1 {
-            rust_kzg_arkworks::kzg_types::ArkG1::rand()
+        pub fn random_g1(&self) -> FsG1 {
+            FsG1::rand()
         }
     }
 
@@ -260,7 +258,7 @@ mod tests {
     #[tracing_test::traced_test]
     fn test_arkworks_backend() {
         let cfg = crate::engine::backend::BackendConfig::new(Some(4), None);
-        let backend = ArkworksBackend::new(Some(cfg.clone()));
+        let backend = BlstBackend::new(Some(cfg.clone()));
         let poly = backend.random_poly();
         tracing::info!("poly: {:?}", poly.clone());
         let x = backend.random_fr();
@@ -276,11 +274,11 @@ mod tests {
     #[test]
     fn test_arkworks_g1_serialize_deserialize() {
         let cfg = crate::engine::backend::BackendConfig::new(Some(4), None);
-        let backend = ArkworksBackend::new(Some(cfg.clone()));
+        let backend = BlstBackend::new(Some(cfg.clone()));
         let g1 = backend.random_g1();
         println!("g1: {:?}", g1);
         let g1_bytes = g1.to_bytes();
-        let reserialized = rust_kzg_arkworks::kzg_types::ArkG1::from_bytes(&g1_bytes);
+        let reserialized = FsG1::from_bytes(&g1_bytes);
         assert_eq!(reserialized, Ok(g1));
     }
 
@@ -288,7 +286,7 @@ mod tests {
     #[tracing_test::traced_test]
     fn test_pipeline() {
         let cfg = crate::engine::backend::BackendConfig::new(Some(4), Some("setup".to_string()));
-        let backend = ArkworksBackend::new(Some(cfg.clone()));
+        let backend = BlstBackend::new(Some(cfg.clone()));
 
         // Get hardcoded poly
         let poly = backend
@@ -344,7 +342,7 @@ mod tests {
 
         info!("Generating setup");
         let cfg = crate::engine::backend::BackendConfig::new(Some(20), None);
-        let backend = ArkworksBackend::new(Some(cfg.clone()));
+        let backend = BlstBackend::new(Some(cfg.clone()));
 
         let mut file = std::fs::File::create("setup").unwrap();
 
