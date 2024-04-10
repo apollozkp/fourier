@@ -508,22 +508,22 @@ impl Server {
         format!("{}:{}", self.cfg.host, self.cfg.port)
     }
 
-    fn new_handler<B>(&self) -> RpcHandler<B>
+    fn new_handler<B>(&self, path: Option<String>) -> RpcHandler<B>
     where
         B: crate::engine::backend::Backend,
     {
-        let backend = B::new(self.cfg.backend.clone());
+        let backend = B::new(self.cfg.backend.clone(), path);
         RpcHandler::new(Arc::new(backend))
     }
 
-    pub async fn run<B>(&self) -> std::io::Result<()>
+    pub async fn run<B>(&self, path: Option<String>) -> std::io::Result<()>
     where
         B: crate::engine::backend::Backend + Send + Sync + 'static,
     {
         info!("Starting server...");
         let listener = tokio::net::TcpListener::bind(&self.addr()).await?;
         info!("Listening on: {}", self.addr());
-        let handler = self.new_handler::<B>();
+        let handler = self.new_handler::<B>(path);
 
         loop {
             let (stream, _) = listener.accept().await?;
@@ -544,7 +544,7 @@ impl Server {
     }
 }
 
-pub async fn start_rpc_server<B>(port: u16)
+pub async fn start_rpc_server<B>(port: u16, path: Option<String>)
 where
     B: crate::engine::backend::Backend + Send + Sync + 'static,
 {
@@ -555,7 +555,7 @@ where
     info!("Starting RPC server...");
     let config = ServerConfig::new(port);
     let server = Server::new(config);
-    server.run::<B>().await.unwrap();
+    server.run::<B>(path).await.unwrap();
 }
 
 #[cfg(test)]

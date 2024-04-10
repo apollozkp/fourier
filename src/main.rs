@@ -10,11 +10,13 @@ struct Args {
     host: String,
     #[arg(short = 'P', long, default_value = "1337")]
     port: u16,
+    #[arg(short = 'p', long, default_value = None)]
+    path: Option<String>,
 }
 
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
     type Backend = engine::arkworks::ArkworksBackend;
-    rpc::start_rpc_server::<Backend>(args.port).await;
+    rpc::start_rpc_server::<Backend>(args.port, args.path).await;
 }

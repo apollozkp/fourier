@@ -2,7 +2,6 @@ use kzg::{FFTSettings, Fr, G1Affine, G1Fp, G1GetFp, G1Mul, KZGSettings, Poly, G1
 
 pub trait Backend {
     // TODO: These should probably not be constants, probably should be initialized somehow
-    const SECRET: [u8; 32usize];
     const SCALE: usize;
 
     type Fr: Fr;
@@ -27,7 +26,7 @@ pub trait Backend {
         secret: [u8; 32usize],
     ) -> (Vec<Self::G1>, Vec<Self::G2>);
 
-    fn new(cfg: Option<BackendConfig>) -> Self;
+    fn new(cfg: Option<BackendConfig>, g1_g2: Option<String>) -> Self;
 
     fn commit_to_poly(&self, poly: Self::Poly) -> Result<Self::G1, String>;
 
@@ -54,11 +53,10 @@ pub trait Backend {
 #[derive(Debug, Clone)]
 pub struct BackendConfig {
     pub scale: usize,
-    pub secret: [u8; 32usize],
 }
 
 impl BackendConfig {
-    pub fn new(scale: usize, secret: [u8; 32usize]) -> Self {
-        Self { scale, secret }
+    pub fn new(scale: usize) -> Self {
+        Self { scale }
     }
 }

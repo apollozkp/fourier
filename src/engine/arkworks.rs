@@ -1,4 +1,10 @@
+use ark_bls12_381::{G1Affine, G2Affine};
+use ark_ec::AffineRepr;
+use ark_serialize::CanonicalDeserialize;
 use kzg::{FFTSettings, Fr, KZGSettings, Poly, G1};
+use rand::Rng;
+use rust_kzg_arkworks::kzg_types::{ArkG1, ArkG2};
+use std::io::Read;
 
 pub struct ArkworksBackend {
     pub fft_settings: rust_kzg_arkworks::kzg_proofs::FFTSettings,
@@ -6,12 +12,7 @@ pub struct ArkworksBackend {
 }
 
 impl crate::engine::backend::Backend for ArkworksBackend {
-    const SECRET: [u8; 32usize] = [
-        0xa4, 0x73, 0x31, 0x95, 0x28, 0xc8, 0xb6, 0xea, 0x4d, 0x08, 0xcc, 0x53, 0x18, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00,
-    ];
-    const SCALE: usize = 4;
+    const SCALE: usize = 20;
 
     type Fr = rust_kzg_arkworks::kzg_types::ArkFr;
     type G1 = rust_kzg_arkworks::kzg_types::ArkG1;
@@ -30,17 +31,52 @@ impl crate::engine::backend::Backend for ArkworksBackend {
     }
 
     fn default() -> crate::engine::backend::BackendConfig {
-        crate::engine::backend::BackendConfig::new(Self::SCALE, Self::SECRET)
+        crate::engine::backend::BackendConfig::new(Self::SCALE)
     }
 
-    fn new(cfg: Option<crate::engine::backend::BackendConfig>) -> Self {
-        let (scale, secret) = match cfg {
-            Some(cfg) => (cfg.scale, cfg.secret),
-            None => (Self::SCALE, Self::SECRET),
+    fn new(cfg: Option<crate::engine::backend::BackendConfig>, g1_g2: Option<String>) -> Self {
+        let scale = match cfg {
+            Some(cfg) => cfg.scale,
+            None => Self::SCALE,
         };
         let fft_settings = rust_kzg_arkworks::kzg_proofs::FFTSettings::new(scale)
             .expect("Failed to create FFTSettings");
-        let (s1, s2) = Self::generate_trusted_setup(fft_settings.get_max_width(), secret);
+
+        let (s1, s2) = if let Some(path) = g1_g2 {
+            let mut file = std::fs::File::open(path).unwrap();
+            let mut g1_size_bytes = [0u8; 8];
+            file.read_exact(&mut g1_size_bytes).unwrap();
+            let g1_size = u64::from_le_bytes(g1_size_bytes);
+            let mut g1 = Vec::with_capacity(g1_size as usize);
+            for _ in 0..g1_size {
+                let mut g1_bytes = [0u8; 48];
+                file.read_exact(&mut g1_bytes).unwrap();
+                let g1_el =
+                    G1Affine::deserialize_compressed_unchecked(g1_bytes.as_slice()).unwrap();
+                let g1_el = ArkG1(g1_el.into_group());
+                g1.push(g1_el);
+            }
+
+            let mut g2_size_bytes = [0u8; 8];
+            file.read_exact(&mut g2_size_bytes).unwrap();
+            let g2_size = u64::from_le_bytes(g2_size_bytes);
+            let mut g2 = Vec::with_capacity(g2_size as usize);
+            for _ in 0..g2_size {
+                let mut g2_bytes = [0u8; 96];
+                file.read_exact(&mut g2_bytes).unwrap();
+                let g2_el =
+                    G2Affine::deserialize_compressed_unchecked(g2_bytes.as_slice()).unwrap();
+                let g2_el = ArkG2(g2_el.into_group());
+                g2.push(g2_el);
+            }
+
+            println!("reading");
+            (g1, g2)
+        } else {
+            let secret: [u8; 32] = rand::thread_rng().gen();
+            Self::generate_trusted_setup(fft_settings.get_max_width(), secret)
+        };
+
         let kzg_settings = rust_kzg_arkworks::kzg_proofs::KZGSettings::new(
             &s1,
             &s2,
@@ -48,6 +84,7 @@ impl crate::engine::backend::Backend for ArkworksBackend {
             &fft_settings,
         )
         .expect("Failed to create KZGSettings");
+        println!("DONE");
         Self {
             fft_settings,
             kzg_settings,
@@ -113,9 +150,6 @@ mod tests {
     use kzg::Fr;
     use kzg::Poly;
 
-    const SECRET: [u8; 32usize] = ArkworksBackend::SECRET;
-    const SCALE: usize = ArkworksBackend::SCALE;
-
     const TEST_POLY: [&str; 16] = [
         "6945DC5C4FF4DAC8A7278C9B8F0D4613320CF87FF947F21AC9BF42327EC19448",
         "68E40C088D827BCCE02CEF34BDC8C12BB025FBEA047BC6C00C0C8C5C925B7FAF",
@@ -163,8 +197,8 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_arkworks_backend() {
-        let cfg = crate::engine::backend::BackendConfig::new(SCALE, SECRET);
-        let backend = ArkworksBackend::new(Some(cfg.clone()));
+        let cfg = crate::engine::backend::BackendConfig::new(4);
+        let backend = ArkworksBackend::new(Some(cfg.clone()), None);
         let poly = backend.random_poly();
         tracing::info!("poly: {:?}", poly.clone());
         let x = backend.random_fr();
@@ -179,8 +213,8 @@ mod tests {
 
     #[test]
     fn test_arkworks_g1_serialize_deserialize() {
-        let cfg = crate::engine::backend::BackendConfig::new(SCALE, SECRET);
-        let backend = ArkworksBackend::new(Some(cfg.clone()));
+        let cfg = crate::engine::backend::BackendConfig::new(4);
+        let backend = ArkworksBackend::new(Some(cfg.clone()), None);
         let g1 = backend.random_g1();
         println!("g1: {:?}", g1);
         let g1_bytes = g1.to_bytes();
@@ -191,8 +225,8 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_pipeline() {
-        let cfg = crate::engine::backend::BackendConfig::new(SCALE, SECRET);
-        let backend = ArkworksBackend::new(Some(cfg.clone()));
+        let cfg = crate::engine::backend::BackendConfig::new(4);
+        let backend = ArkworksBackend::new(Some(cfg.clone()), Some("setup".to_owned()));
 
         // Get hardcoded poly
         let poly = backend
@@ -238,4 +272,30 @@ mod tests {
             .expect("Failed to verify proof");
         assert!(result);
     }
+
+    // #[test]
+    // fn write_setup() {
+    //     use kzg::G2;
+    //     use std::io::Write;
+
+    //     let cfg = crate::engine::backend::BackendConfig::new(20);
+    //     let backend = ArkworksBackend::new(Some(cfg.clone()), None);
+
+    //     let mut file = std::fs::File::create("setup").unwrap();
+    //     let encoded_s1_size = backend.kzg_settings.secret_g1.len() as u64;
+    //     file.write(&encoded_s1_size.to_le_bytes()).unwrap();
+
+    //     for el in backend.kzg_settings.secret_g1 {
+    //         let bytes = el.to_bytes();
+    //         file.write(&bytes).unwrap();
+    //     }
+
+    //     let encoded_s2_size = backend.kzg_settings.secret_g2.len() as u64;
+    //     file.write(&encoded_s2_size.to_le_bytes()).unwrap();
+
+    //     for el in backend.kzg_settings.secret_g2 {
+    //         let bytes = el.to_bytes();
+    //         file.write(&bytes).unwrap();
+    //     }
+    // }
 }
