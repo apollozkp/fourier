@@ -494,7 +494,7 @@ impl ServerConfig {
     pub fn new(port: Option<u16>, host: Option<String>) -> Self {
         ServerConfig {
             host: host.unwrap_or(Self::DEFAULT_HOST.to_owned()),
-            port: port.unwrap_or(1337),
+            port: port.unwrap_or(Self::DEFAULT_PORT),
             backend: None,
         }
     }
