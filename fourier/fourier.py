@@ -68,7 +68,7 @@ class Client:
         return f"http://{self.host}:{self.port}"
 
     def rust_cmd(self, default_bin=DEFAULT_BIN):
-        return [f"./{default_bin}", "--host", self.host, "--port", str(self.port)]
+        return [f"./{default_bin}", "run", "--host", self.host, "--port", str(self.port), "--scale", "4"]
 
     def start_rust(self, default_bin=DEFAULT_BIN) -> bool:
         if self.rust_rpc is not None:
