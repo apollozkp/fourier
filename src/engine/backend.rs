@@ -42,14 +42,62 @@ pub trait Backend {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct BackendCacheConfig {
+    pub secrets_path: Option<String>,
+    pub precompute_path: Option<String>,
+}
+
+impl BackendCacheConfig {
+    pub fn new(secrets_path: Option<String>, precompute_path: Option<String>) -> Self {
+        Self {
+            secrets_path,
+            precompute_path,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct BackendConfig {
     pub scale: Option<usize>,
-    pub path: Option<String>,
-    pub precompute: Option<bool>,
+    pub skip_precompute: Option<bool>,
+    pub skip_secrets: Option<bool>,
+    pub cache: Option<BackendCacheConfig>,
 }
 
 impl BackendConfig {
-    pub fn new(scale: Option<usize>, path: Option<String>, precompute: Option<bool>) -> Self {
-        Self { scale, path, precompute}
+    pub fn new(
+        scale: Option<usize>,
+        cache: Option<BackendCacheConfig>,
+        skip_precompute: Option<bool>,
+        skip_secrets: Option<bool>,
+    ) -> Self {
+        Self {
+            scale,
+            skip_precompute,
+            skip_secrets,
+            cache,
+        }
+    }
+
+    pub fn secrets_path(&self) -> Option<&str> {
+        self.cache.as_ref().and_then(|c| c.secrets_path.as_deref())
+    }
+
+    pub fn precompute_path(&self) -> Option<&str> {
+        self.cache
+            .as_ref()
+            .and_then(|c| c.precompute_path.as_deref())
+    }
+
+    pub fn scale(&self) -> Option<usize> {
+        self.scale
+    }
+
+    pub fn skip_precompute(&self) -> Option<bool> {
+        self.skip_precompute
+    }
+
+    pub fn skip_secrets(&self) -> Option<bool> {
+        self.skip_secrets
     }
 }

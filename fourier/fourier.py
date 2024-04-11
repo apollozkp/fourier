@@ -8,7 +8,9 @@ import requests
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 1337
 DEFAULT_BIN = "target/release/fourier"
-DEFAULT_SETUP_PATH = "setup"
+DEFAULT_SECRETS_PATH = "secrets"
+DEFAULT_PRECOMPUTE_PATH = "precompute"
+DEFAULT_SKIP_PRECOMPUTE = False
 
 
 class RPCRequest:
@@ -83,13 +85,20 @@ class CLI:
         return True
 
     def run(
-        self, host=None, port=None, scale=None, setup_path=None, precompute=False
+        self,
+        host=None,
+        port=None,
+        scale=None,
+        secrets_path=None,
+        precompute_path=None,
+        skip_precompute=False,
     ) -> bool:
         HOST_LONG = "--host"
         PORT_LONG = "--port"
         SCALE_LONG = "--scale"
-        SETUP_PATH_LONG = "--setup-path"
-        PRECOMPUTE_LONG = "--precompute"
+        SECRETS_PATH_LONG = "--secrets-path"
+        PRECOMPUTE_PATH_LONG = "--precompute-path"
+        SKIP_PRECOMPUTE_LONG = "--skip-precompute"
         args = ["run"]
         if host:
             args.extend([HOST_LONG, host])
@@ -97,20 +106,32 @@ class CLI:
             args.extend([PORT_LONG, str(port)])
         if scale:
             args.extend([SCALE_LONG, str(scale)])
-        if setup_path:
-            args.extend([SETUP_PATH_LONG, setup_path])
-        if precompute:
-            args.extend([PRECOMPUTE_LONG])
+        if secrets_path:
+            args.extend([SECRETS_PATH_LONG, secrets_path])
+        if precompute_path:
+            args.extend([PRECOMPUTE_PATH_LONG, precompute_path])
+        if skip_precompute:
+            args.extend([SKIP_PRECOMPUTE_LONG])
         print(f"Running: {self.cmd(args)}")
         self.process = subprocess.Popen(args=self.cmd(args))
         return self.wait_until_running()
 
-    def setup(self, path=None, overwrite=False):
+    def setup(
+        self, secrets_path=None, overwrite=False, scale=None, precompute_path=None
+    ):
+        SCALE_LONG = "--scale"
+        SECRETS_PATH_LONG = "--secrets-path"
+        PRECOMPUTE_PATH_LONG = "--precompute-path"
+        OVERWRITE_LONG = "--overwrite"
         args = ["setup"]
-        if path:
-            args.extend(["--path", path])
+        if secrets_path:
+            args.extend([SECRETS_PATH_LONG, secrets_path])
+        if precompute_path:
+            args.extend([PRECOMPUTE_PATH_LONG, precompute_path])
         if overwrite:
-            args.append("--overwrite")
+            args.extend([OVERWRITE_LONG])
+        if scale:
+            args.extend([SCALE_LONG, str(scale)])
         self.process = subprocess.Popen(args=self.cmd(args))
         return self.wait_until_running()
 
@@ -133,10 +154,18 @@ class Client:
         return f"http://{self.host}:{self.port}"
 
     def start_rust(
-        self, default_bin=DEFAULT_BIN, setup_path=DEFAULT_SETUP_PATH, precompute=False
+        self,
+        default_bin=DEFAULT_BIN,
+        secrets_path=DEFAULT_SECRETS_PATH,
+        precompute_path=DEFAULT_PRECOMPUTE_PATH,
+        skip_precompute=DEFAULT_SKIP_PRECOMPUTE,
     ) -> bool:
         self.cli.run(
-            host=self.host, port=self.port, setup_path=setup_path, precompute=precompute
+            host=self.host,
+            port=self.port,
+            secrets_path=secrets_path,
+            precompute_path=precompute_path,
+            skip_precompute=skip_precompute,
         )
         return self.cli.is_running()
 
@@ -199,7 +228,8 @@ class Client:
         return resp
 
     # Prove a polynomial
-    # This is a combinatory method, and performs a commitment and an opening on a randomly generated point.
+    # This is a combinatory method, and performs a commitment and an
+    # opening on a randomly generated point.
     # This method provides convenience for miners and simplifies the code.
     def prove(self, poly: str) -> requests.Response:
         req = RPCRequest.prove(poly)

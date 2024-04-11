@@ -480,11 +480,21 @@ impl Config {
     pub fn new(
         port: Option<u16>,
         host: Option<String>,
-        path: Option<String>,
+        secrets_path: Option<String>,
+        precompute_path: Option<String>,
         scale: Option<usize>,
-        precompute: Option<bool>,
+        skip_precompute: Option<bool>,
     ) -> Self {
-        let backend = crate::engine::backend::BackendConfig::new(scale, path, precompute);
+        let cache_config = crate::engine::backend::BackendCacheConfig::new(
+            secrets_path.clone(),
+            precompute_path.clone(),
+        );
+        let backend = crate::engine::backend::BackendConfig::new(
+            scale,
+            Some(cache_config),
+            skip_precompute,
+            None,
+        );
         Config {
             host: host.unwrap_or(Self::DEFAULT_HOST.to_owned()),
             port: port.unwrap_or(Self::DEFAULT_PORT),
@@ -492,7 +502,6 @@ impl Config {
         }
     }
 }
-
 
 #[derive(Debug, Default)]
 pub struct Server {

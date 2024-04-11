@@ -2,11 +2,7 @@ pub mod engine;
 pub mod rpc;
 pub mod utils;
 
-use kzg::G1;
-use kzg::G2;
-use std::io::Write;
 use tracing::error;
-use tracing::warn;
 
 use crate::engine::backend::Backend as _;
 use crate::engine::{backend::BackendConfig, blst::BlstBackend as Backend};
@@ -34,76 +30,87 @@ enum SubCommand {
 
 #[derive(Parser, Debug)]
 struct SetupArgs {
-    #[clap(short, long)]
-    path: Option<String>,
-    #[clap(short, long)]
+    #[clap(long)]
+    secrets_path: Option<String>,
+    #[clap(long)]
+    precompute_path: Option<String>,
+    #[clap(long)]
     scale: Option<usize>,
-    #[clap(short, long)]
+    #[clap(long)]
     overwrite: bool,
+    #[clap(long)]
+    skip_secrets: bool,
+}
+
+impl SetupArgs {
+    fn to_config(&self) -> BackendConfig {
+        let cache_config = crate::engine::backend::BackendCacheConfig::new(
+            if self.skip_secrets {self.secrets_path.clone()} else {None},
+            None,
+        );
+        BackendConfig::new(
+            self.scale,
+            Some(cache_config),
+            None,
+            Some(self.skip_secrets),
+        )
+    }
 }
 
 #[derive(Parser, Debug)]
 struct RunArgs {
-    #[clap(short, long)]
+    #[clap(long)]
     host: Option<String>,
-    #[clap(short = 'P', long)]
+    #[clap(long)]
     port: Option<u16>,
-    #[clap(short = 'S', long)]
+    #[clap(long)]
     scale: Option<usize>,
-    #[clap(short, long)]
-    setup_path: Option<String>,
-    #[clap(short, long)]
-    precompute: bool,
+    #[clap(long)]
+    secrets_path: Option<String>,
+    #[clap(long)]
+    precompute_path: Option<String>,
+    #[clap(long)]
+    skip_precompute: bool,
 }
 
 impl RunArgs {
     fn to_config(&self) -> rpc::Config {
-        rpc::Config::new(self.port, self.host.clone(), self.setup_path.clone(), self.scale, Some(self.precompute))
+        rpc::Config::new(
+            self.port,
+            self.host.clone(),
+            self.secrets_path.clone(),
+            self.precompute_path.clone(),
+            self.scale,
+            Some(self.skip_precompute),
+        )
     }
 }
 
 pub(crate) fn setup(args: SetupArgs) {
-    if let Some(path) = &args.path {
-        if std::path::Path::new(path).exists() {
-            if args.overwrite {
-                warn!("File already exists, will be overwritten");
-            } else {
-                error!("File already exists, use --overwrite to overwrite");
-                return;
-            }
-        }
+    fn path_exists(path: Option<String>) -> bool {
+        path.map(|p| std::path::Path::new(&p).exists())
+            .unwrap_or(false)
+    }
+    if path_exists(args.secrets_path.clone()) && !args.overwrite {
+        error!("File {} already exists, use --overwrite to overwrite", args.secrets_path.unwrap());
+        return;
+    }
+    if path_exists(args.precompute_path.clone()) && !args.overwrite {
+        error!("File {} already exists, use --overwrite to overwrite", args.precompute_path.unwrap());
+        return;
     }
 
     let backend = utils::timed("setup", || {
-        let cfg = BackendConfig::new(args.scale, None, None);
-        Backend::new(Some(cfg.clone()))
+        Backend::new(Some(args.to_config().clone()))
     });
 
-    let file_path = args.path.unwrap_or("setup".to_string());
-    let mut file = std::fs::File::create(file_path).unwrap();
-
-    utils::timed("writing s1", || {
-        let encoded_s1_size = backend.kzg_settings.secret_g1.len() as u64;
-        Write::write(&mut file, &encoded_s1_size.to_le_bytes()).unwrap();
-        for el in backend.kzg_settings.secret_g1.iter() {
-            let bytes = el.to_bytes();
-            Write::write(&mut file, &bytes).unwrap();
-        }
-    });
-
-    utils::timed("writing s2", || {
-        let encoded_s2_size = backend.kzg_settings.secret_g2.len() as u64;
-        Write::write(&mut file, &encoded_s2_size.to_le_bytes()).unwrap();
-        for el in backend.kzg_settings.secret_g2.iter() {
-            let bytes = el.to_bytes();
-            Write::write(&mut file, &bytes).unwrap();
-        }
-    });
+    if let Err(e) = backend.save_to_file(args.secrets_path, args.precompute_path) {
+        error!("Failed to save to file: {}", e);
+    }
 }
 
 async fn run_server(args: RunArgs) {
-    let cfg = args.to_config();
-    rpc::start_rpc_server::<Backend>(cfg).await;
+    rpc::start_rpc_server::<Backend>(args.to_config()).await;
 }
 
 #[tokio::main]
