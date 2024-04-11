@@ -1,12 +1,15 @@
 use kzg::{FFTSettings, Fr, KZGSettings, Poly, G1, G2};
 use rand::Rng;
 use rayon::prelude::*;
+use rust_kzg_blst::types::fp::FsFp;
+use rust_kzg_blst::types::fr::FsFr;
+use rust_kzg_blst::types::g1::FsG1Affine;
 use rust_kzg_blst::types::{g1::FsG1, g2::FsG2};
 use rust_kzg_blst::utils::generate_trusted_setup;
 // use rust_kzg_blst::kzg_types::{FsG1, FsG2};
 use crate::utils::timed;
-use std::io::{Read, Write};
-use tracing::{debug, info, warn};
+use std::io::Read;
+use tracing::{debug, warn};
 
 pub struct BlstBackend {
     pub fft_settings: rust_kzg_blst::types::fft_settings::FsFFTSettings,
@@ -132,6 +135,14 @@ impl BlstBackend {
                 precomputation: None,
             })
         }
+    }
+
+    pub fn load_precompute_from_file(path: &str) -> Result<Option<kzg::msm::precompute::PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>>, String> {
+        kzg::msm::precompute::precompute_from_file(path)
+    }
+
+    pub fn save_precompute_to_file(precompute: &kzg::msm::precompute::PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>, path: &str) -> Result<(), String> {
+        kzg::msm::precompute::precompute_to_file(precompute, path)
     }
 }
 
@@ -311,6 +322,26 @@ mod tests {
 
     #[test]
     #[tracing_test::traced_test]
+    fn test_write_and_load_precompute() {
+        let cfg = crate::engine::backend::BackendConfig::new(Some(4), None, Some(true));
+        let backend = BlstBackend::new(Some(cfg.clone()));
+
+        let path = "test_precompute".to_owned();
+        if let Some(precomputation) = backend.kzg_settings.get_precomputation() {
+            BlstBackend::save_precompute_to_file(precomputation, &path)
+                .expect("Failed to save precompute to file");
+
+            let loaded = BlstBackend::load_precompute_from_file(&path)
+                .expect("Failed to load precompute from file");
+
+            debug!("precomputation: {:?}", precomputation);
+            debug!("loaded: {:?}", loaded);
+        }
+        // std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
     fn test_pipeline() {
         use crate::{setup, BackendConfig, SetupArgs};
 
@@ -321,7 +352,7 @@ mod tests {
             overwrite: true,
         };
         setup(args);
-        let backend = BlstBackend::new(Some(BackendConfig::new(None, Some(path.clone()))));
+        let backend = BlstBackend::new(Some(BackendConfig::new(None, Some(path.clone()), Some(false))));
 
         // Get hardcoded poly
         let poly = backend
