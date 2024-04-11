@@ -20,6 +20,9 @@ jobs:
         override: true
         components: llvm-tools-preview
 
+    - name: Update Rust Nightly
+      run: rustup update nightly
+
     - name: Install grcov
       run: cargo install grcov
 
@@ -28,7 +31,7 @@ jobs:
         export CARGO_INCREMENTAL=0
         export RUSTFLAGS="-Zinstrument-coverage"
         export LLVM_PROFILE_FILE="your_project_name-%p-%m.profraw"
-        cargo test
+        cargo +nightly test
         grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --ignore "/*" -o ./coverage.lcov
 
     - name: Upload to Coveralls
