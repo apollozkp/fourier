@@ -45,10 +45,11 @@ pub trait Backend {
 pub struct BackendConfig {
     pub scale: Option<usize>,
     pub path: Option<String>,
+    pub precompute: Option<bool>,
 }
 
 impl BackendConfig {
-    pub fn new(scale: Option<usize>, path: Option<String>) -> Self {
-        Self { scale, path }
+    pub fn new(scale: Option<usize>, path: Option<String>, precompute: Option<bool>) -> Self {
+        Self { scale, path, precompute}
     }
 }

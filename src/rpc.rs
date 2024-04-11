@@ -467,53 +467,32 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ServerConfig {
-    pub host: String,
-    pub port: u16,
-    pub backend: Option<crate::engine::backend::BackendConfig>,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct Config {
-    pub server: ServerConfig,
+    pub host: String,
+    pub port: u16,
     pub backend: crate::engine::backend::BackendConfig,
 }
 
 impl Config {
+    const DEFAULT_PORT: u16 = 1337;
+    const DEFAULT_HOST: &'static str = "localhost";
     pub fn new(
         port: Option<u16>,
         host: Option<String>,
         path: Option<String>,
         scale: Option<usize>,
+        precompute: Option<bool>,
     ) -> Self {
-        let server = ServerConfig::new(port, host);
-        let backend = crate::engine::backend::BackendConfig::new(scale, path);
-        Config { server, backend }
-    }
-}
-
-impl ServerConfig {
-    const DEFAULT_PORT: u16 = 1337;
-    const DEFAULT_HOST: &'static str = "127.0.0.1";
-    pub fn new(port: Option<u16>, host: Option<String>) -> Self {
-        ServerConfig {
+        let backend = crate::engine::backend::BackendConfig::new(scale, path, precompute);
+        Config {
             host: host.unwrap_or(Self::DEFAULT_HOST.to_owned()),
             port: port.unwrap_or(Self::DEFAULT_PORT),
-            backend: None,
+            backend,
         }
     }
 }
 
-impl Default for ServerConfig {
-    fn default() -> Self {
-        ServerConfig {
-            host: "127.0.0.1".to_owned(),
-            port: 1337,
-            backend: None,
-        }
-    }
-}
 
 #[derive(Debug, Default)]
 pub struct Server {
@@ -526,7 +505,7 @@ impl Server {
     }
 
     fn addr(&self) -> String {
-        format!("{}:{}", self.cfg.server.host, self.cfg.server.port)
+        format!("{}:{}", self.cfg.host, self.cfg.port)
     }
 
     fn new_handler<B>(&self) -> RpcHandler<B>

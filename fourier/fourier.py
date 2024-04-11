@@ -1,12 +1,14 @@
 import json
 import subprocess
 import time
+from typing import List
 
 import requests
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 1337
 DEFAULT_BIN = "target/release/fourier"
+DEFAULT_SETUP_PATH = "setup"
 
 
 class RPCRequest:
@@ -58,42 +60,91 @@ class RPCRequest:
         return RPCRequest(method="prove", params=params)
 
 
+class CLI:
+    def __init__(self, bin=DEFAULT_BIN):
+        self.bin = bin
+        self.process = None
+
+    def cmd(self, args: List[str]):
+        return [
+            self.bin,
+            *args,
+        ]
+
+    def wait_until_running(self) -> bool:
+        time.sleep(1)
+        total_sleep = 0
+        while not self.is_running():
+            total_sleep += 1
+            time.sleep(1)
+            if total_sleep > 10:
+                print("Failed to start process.")
+                return False
+        return True
+
+    def run(
+        self, host=None, port=None, scale=None, setup_path=None, precompute=False
+    ) -> bool:
+        HOST_LONG = "--host"
+        PORT_LONG = "--port"
+        SCALE_LONG = "--scale"
+        SETUP_PATH_LONG = "--setup-path"
+        PRECOMPUTE_LONG = "--precompute"
+        args = ["run"]
+        if host:
+            args.extend([HOST_LONG, host])
+        if port:
+            args.extend([PORT_LONG, str(port)])
+        if scale:
+            args.extend([SCALE_LONG, str(scale)])
+        if setup_path:
+            args.extend([SETUP_PATH_LONG, setup_path])
+        if precompute:
+            args.extend([PRECOMPUTE_LONG])
+        print(f"Running: {self.cmd(args)}")
+        self.process = subprocess.Popen(args=self.cmd(args))
+        return self.wait_until_running()
+
+    def setup(self, path=None, overwrite=False):
+        args = ["setup"]
+        if path:
+            args.extend(["--path", path])
+        if overwrite:
+            args.append("--overwrite")
+        self.process = subprocess.Popen(args=self.cmd(args))
+        return self.wait_until_running()
+
+    def stop(self) -> bool:
+        if self.is_running():
+            self.process.terminate()
+        return self.is_running()
+
+    def is_running(self):
+        return self.process.poll() is None
+
+
 class Client:
     def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT):
         self.host = host
         self.port = port
-        self.rust_rpc = None
+        self.cli = CLI()
 
     def endpoint(self):
         return f"http://{self.host}:{self.port}"
 
-    def rust_cmd(self, default_bin=DEFAULT_BIN):
-        return [f"./{default_bin}", "run", "--host", self.host, "--port", str(self.port), "--scale", "4"]
-
-    def start_rust(self, default_bin=DEFAULT_BIN) -> bool:
-        if self.rust_rpc is not None:
-            print("Rust server is already running.")
-            return False
-
-        self.rust_rpc = subprocess.Popen(args=self.rust_cmd(default_bin))
-
-        if self.rust_rpc is None:
-            print("Failed to start Rust server.")
-            return False
-        print("waiting for Rust server to start...")
-        time.sleep(3)
-        return True
+    def start_rust(
+        self, default_bin=DEFAULT_BIN, setup_path=DEFAULT_SETUP_PATH, precompute=False
+    ) -> bool:
+        self.cli.run(
+            host=self.host, port=self.port, setup_path=setup_path, precompute=precompute
+        )
+        return self.cli.is_running()
 
     def stop_rust(self) -> bool:
-        if self.rust_rpc is None:
-            print("No Rust server to stop.")
-            return False
-        self.rust_rpc.terminate()
-        self.rust_rpc = None
-        return True
+        return self.cli.stop()
 
-    def start(self, default_bin=DEFAULT_BIN):
-        if not self.start_rust(default_bin):
+    def start(self) -> bool:
+        if not self.start_rust():
             return False
         if not self.ping().ok:
             print("Failed to ping Rust server.")
@@ -209,106 +260,43 @@ def eval_poly(rpc, poly, x):
         return data.get("result", {}).get("y")
     return None
 
+
 def prove(rpc, poly):
     with rpc.prove(poly) as resp:
         data = resp.json()
         if data.get("error"):
             print(f"Error: {data.get('error')}")
-        return data.get("result", {}).get("commitment"), data.get("result", {}).get("y"), data.get("result", {}).get("x"), data.get("result", {}).get("proof")
+        return (
+            data.get("result", {}).get("commitment"),
+            data.get("result", {}).get("y"),
+            data.get("result", {}).get("x"),
+            data.get("result", {}).get("proof"),
+        )
     return None
 
 
-def test_pipeline(rpc, poly, x, y, expected_commitment=None, expected_proof=None):
-    commitment = commit(rpc, poly)
-    if not commitment:
-        print("Failed to commit to polynomial.")
-        return
-    if expected_commitment and commitment != expected_commitment:
-        print(
-            f"Commitment mismatch. Expected: {expected_commitment}, Got: {commitment}"
-        )
-    else:
-        print(f"Commitment: {commitment}")
-
-    proof = open(rpc, poly, x)
-    if not proof:
-        print("Failed to open commitment.")
-        return
-    if expected_proof and proof != expected_proof:
-        print(f"Proof mismatch. Expected: {expected_proof}, Got: {proof}")
-    else:
-        print(f"Proof: {proof}")
-
-    valid = verify(rpc, proof, x, y, commitment)
-    if not valid:
-        print("Failed to verify proof.")
-        return
-    print(f"Verification: {valid}")
-
-    commitment, y, x, proof = prove(rpc, poly)
-    valid = verify(rpc, proof, x, y, commitment)
-    if not valid:
-        print("Failed to make a valid proof from a polynomial.")
-        return
-    print(f"Prove: {commitment}, {y}, {x}, {proof}")
-
-
-def test_random_poly(rpc, degree):
-    poly = random_poly(rpc, degree)
-    if not poly:
-        print("Failed to generate random polynomial.")
-        return
-    point = random_point(rpc)
-    if not point:
-        print("Failed to generate random point.")
-        return
-    eval = eval_poly(rpc, poly, point)
-    if not eval:
-        print("Failed to evaluate polynomial.")
-        return
-
-
 if __name__ == "__main__":
+    import os
+
+    os.environ["RUST_LOG"] = "debug"
     HOST = "localhost"
     PORT = 1337
     rpc = Client(host=HOST, port=PORT)
     rpc.start()
 
-    TEST_POLY = [
-        "6945DC5C4FF4DAC8A7278C9B8F0D4613320CF87FF947F21AC9BF42327EC19448",
-        "68E40C088D827BCCE02CEF34BDC8C12BB025FBEA047BC6C00C0C8C5C925B7FAF",
-        "67281FAC164E9348B80693BA30D5D4E311DE5878EB3D20E34A58507B484B243C",
-        "5F7C377DAE6B9D9ABAD75DC15E4FFF9FE7520D1F85224C95F485F44978154C5A",
-        "2D85C376A440B6E25C3F7C11559B6A27684023F36C3D7A0ACD7E7D019DE399C7",
-        "4A6FB95F0241B3583771E799120C87AAE3C843ECDB50A38254A92E198968922F",
-        "1005079F96EC412A719FE2E9FA67D421D98FB4DEC4181459E59430F5D502BD2A",
-        "64960B8692062DCB01C0FFBAC569478A89AD880ED3C9DF710BED5CE75F484693",
-        "03C2882155A447642BD21FB1CF2553F80955713F09BBBBD9724E2CBFD8B19D41",
-        "0AB07FECB59EE3435F6129FCD602CB519E56D7B426941633E37A3B676A24830F",
-        "12FA5861459EFFBAE654827D98BFDFEA5545DDF8BB9628579463DA21F17462B5",
-        "6A6296A0376D807530DB09DC8BB069FFDEC3D7541497B82C722A199D6B7C5B06",
-        "153D2C81B54D7E1C3E83EA61C7F66FD88155F1713EE581E2BE8438CA9FEE1A02",
-        "216BCCC4AE97FE3E1D4B21C375C46140FA153E7868201A43480889047ACD0C2D",
-        "381BD4FE924EB10E08F2A227D3DB2083AA0E5A1F661CD3C702C4B8A9385E7839",
-        "723A7640FD7E65473131563AB5514916AC861C2695CE6513E5061E597E5E1A81",
-    ]
+    # Generate initial params
+    f = random_poly(rpc, 10)
+    x = random_point(rpc)
+    y = eval_poly(rpc, f, x)
+    print(f"Generated polynomial: {f}")
+    print(f"Generated point: {x}")
+    print(f"Evaluated polynomial: {y}")
 
-    TEST_POINT = "456006fff56412d329d527901d02877a581a89cfa677ca963eb9d680766234cc"
-    TEST_EVAL = "29732a1e0e074ab05ee6a9e57794c5ad1965b98b6c8c6ecde96ac776ea06ff5b"
-
-    # compressed hex
-    TEST_COMMITMENT = "8424fb9dc224ab79efccf6710edea3b936d03bbd323f052bb9c4b2efe9f98239e7c3e48148f243065cee910054a10e71"
-    TEST_PROOF = "895cdfe1bf26bbf10bdc0d90178ec89635269cca7c9b39836a76e91689ad3fa4d1772f8d60cdd86cd4bfd1dedbdec81d"
-
-    test_pipeline(
-        rpc,
-        TEST_POLY,
-        TEST_POINT,
-        TEST_EVAL,
-        expected_commitment=TEST_COMMITMENT,
-        expected_proof=TEST_PROOF,
-    )
-
-    test_random_poly(rpc, 10)
+    # Commit, open and verify
+    commitment = commit(rpc, f)
+    proof = open(rpc, f, x)
+    valid = verify(rpc, proof, x, y, commitment)
+    assert valid
+    print(f"Proof is valid: {valid}")
 
     rpc.stop()

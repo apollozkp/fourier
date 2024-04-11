@@ -48,15 +48,17 @@ struct RunArgs {
     host: Option<String>,
     #[clap(short = 'P', long)]
     port: Option<u16>,
-    #[clap(short, long)]
+    #[clap(short = 'S', long)]
     scale: Option<usize>,
     #[clap(short, long)]
-    path: Option<String>,
+    setup_path: Option<String>,
+    #[clap(short, long)]
+    precompute: bool,
 }
 
 impl RunArgs {
     fn to_config(&self) -> rpc::Config {
-        rpc::Config::new(self.port, self.host.clone(), self.path.clone(), self.scale)
+        rpc::Config::new(self.port, self.host.clone(), self.setup_path.clone(), self.scale, Some(self.precompute))
     }
 }
 
@@ -73,7 +75,7 @@ pub(crate) fn setup(args: SetupArgs) {
     }
 
     let backend = utils::timed("setup", || {
-        let cfg = BackendConfig::new(args.scale, None);
+        let cfg = BackendConfig::new(args.scale, None, None);
         Backend::new(Some(cfg.clone()))
     });
 

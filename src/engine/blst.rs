@@ -120,21 +120,18 @@ impl BlstBackend {
         s2: &[FsG2],
         max_width: usize,
         fft_settings: &rust_kzg_blst::types::fft_settings::FsFFTSettings,
+        precompute: bool,
     ) -> Result<rust_kzg_blst::types::kzg_settings::FsKZGSettings, String> {
-        rust_kzg_blst::types::kzg_settings::FsKZGSettings::new(s1, s2, max_width, fft_settings)
-    }
-
-    fn save_precompute(&self, path: &str) -> Result<(), String> {
-        match self.kzg_settings.get_precomputation() {
-            Some(precompute) => {
-                let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
-                let mut writer = std::io::BufWriter::new(file);
-                todo!()
-            }
-            None => return Err("Precomputation not available".to_string()),
+        if precompute {
+            rust_kzg_blst::types::kzg_settings::FsKZGSettings::new(s1, s2, max_width, fft_settings)
+        } else {
+            Ok(rust_kzg_blst::types::kzg_settings::FsKZGSettings {
+                fs: fft_settings.clone(),
+                secret_g1: s1.to_vec(),
+                secret_g2: s2.to_vec(),
+                precomputation: None,
+            })
         }
-
-        Ok(())
     }
 }
 
@@ -169,7 +166,8 @@ impl crate::engine::backend::Backend for BlstBackend {
         };
 
         let kzg_settings = timed("Creating KZGSettings", || {
-            Self::new_kzg_settings(&s1, &s2, fft_settings.get_max_width(), &fft_settings)
+            let precompute = cfg.as_ref().and_then(|cfg| cfg.precompute).unwrap_or(false);
+            Self::new_kzg_settings(&s1, &s2, fft_settings.get_max_width(), &fft_settings, precompute)
                 .expect("Failed to create KZGSettings")
         });
 
@@ -285,7 +283,7 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_arkworks_backend() {
-        let cfg = crate::engine::backend::BackendConfig::new(Some(4), None);
+        let cfg = crate::engine::backend::BackendConfig::new(Some(4), None, None);
         let backend = BlstBackend::new(Some(cfg.clone()));
         let poly = backend.random_poly();
         debug!("poly: {:?}", poly.clone());
@@ -302,7 +300,7 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_arkworks_g1_serialize_deserialize() {
-        let cfg = crate::engine::backend::BackendConfig::new(Some(4), None);
+        let cfg = crate::engine::backend::BackendConfig::new(Some(4), None, None);
         let backend = BlstBackend::new(Some(cfg.clone()));
         let g1 = backend.random_g1();
         debug!("g1: {:?}", g1);
