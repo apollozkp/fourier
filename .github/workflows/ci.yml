@@ -1,0 +1,64 @@
+name: Rust and Python CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test-rust:
+    name: Build and Test Rust Code
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+
+    - name: Build
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release
+
+    - name: Run tests
+      uses: actions-rs/cargo@v1
+      with:
+        command: test
+
+  run-python-script:
+    name: Run Python Script
+    needs: build-and-test-rust
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.8'
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install -e .
+
+    - name: Set up Rust (again, to ensure environment consistency)
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+
+    - name: Build Rust code (needed by Python script)
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release
+
+    - name: Run Python script
+      run: python fourier/fourier.py
+
