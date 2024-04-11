@@ -264,9 +264,6 @@ mod tests {
     const TEST_POINT: &str = "456006fff56412d329d527901d02877a581a89cfa677ca963eb9d680766234cc";
     const TEST_EVAL: &str = "29732a1e0e074ab05ee6a9e57794c5ad1965b98b6c8c6ecde96ac776ea06ff5b";
 
-    const EXPECTED_COMMITMENT: &str =  "8424fb9dc224ab79efccf6710edea3b936d03bbd323f052bb9c4b2efe9f98239e7c3e48148f243065cee910054a10e71";
-    const EXPECTED_PROOF: &str = "895cdfe1bf26bbf10bdc0d90178ec89635269cca7c9b39836a76e91689ad3fa4d1772f8d60cdd86cd4bfd1dedbdec81d";
-
     impl BlstBackend {
         pub fn random_poly(&self) -> FsPoly {
             let mut poly = FsPoly::new(self.fft_settings.get_max_width());
@@ -314,55 +311,62 @@ mod tests {
         assert_eq!(reserialized, Ok(g1));
     }
 
-    // TODO: make proper test for fixed setup file and fixed secret
-    // #[test]
-    // #[tracing_test::traced_test]
-    // fn test_pipeline() {
-    //     let cfg = crate::engine::backend::BackendConfig::new(Some(4), Some("setup".to_string()));
-    //     let backend = BlstBackend::new(Some(cfg.clone()));
-    //
-    //     // Get hardcoded poly
-    //     let poly = backend
-    //         .parse_poly_from_str(
-    //             &TEST_POLY
-    //                 .iter()
-    //                 .map(|x| x.to_string())
-    //                 .collect::<Vec<String>>(),
-    //         )
-    //         .expect("Failed to parse poly");
-    //
-    //     // Get hardcoded point
-    //     let x = backend
-    //         .parse_point_from_str(TEST_POINT)
-    //         .expect("Failed to parse point");
-    //     debug!("x: {:?}", hex::encode(x.to_bytes()));
-    //
-    //     // Evaluate poly at point and check against hardcoded value
-    //     let y = poly.eval(&x);
-    //     let expected = backend
-    //         .parse_point_from_str(TEST_EVAL)
-    //         .expect("Failed to parse point");
-    //     debug!("y: {:?}", hex::encode(y.to_bytes()));
-    //     assert_eq!(y, expected);
-    //
-    //     // Commit to poly and check against hardcoded commitment
-    //     let commitment = backend
-    //         .commit_to_poly(poly.clone())
-    //         .expect("Failed to commit to poly");
-    //     debug!("commitment hex: {:?}", hex::encode(commitment.to_bytes()));
-    //     assert_eq!(hex::encode(commitment.to_bytes()), EXPECTED_COMMITMENT);
-    //
-    //     // Compute proof and check against hardcoded proof
-    //     let proof = backend
-    //         .compute_proof_single(poly.clone(), x)
-    //         .expect("Failed to compute proof");
-    //     debug!("proof hex: {:?}", hex::encode(proof.to_bytes()));
-    //     assert_eq!(hex::encode(proof.to_bytes()), EXPECTED_PROOF);
-    //
-    //     // Verify proof
-    //     let result = backend
-    //         .verify_proof_single(proof, x, y, commitment)
-    //         .expect("Failed to verify proof");
-    //     assert!(result);
-    // }
+    #[test]
+    #[tracing_test::traced_test]
+    fn test_pipeline() {
+        use crate::{setup, BackendConfig, SetupArgs};
+
+        let path = "test_setup".to_owned();
+        let args = SetupArgs {
+            path: Some(path.clone()),
+            scale: Some(5), // Jack this up to test with real sizes
+            overwrite: true,
+        };
+        setup(args);
+        let backend = BlstBackend::new(Some(BackendConfig::new(None, Some(path.clone()))));
+
+        // Get hardcoded poly
+        let poly = backend
+            .parse_poly_from_str(
+                &TEST_POLY
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<String>>(),
+            )
+            .expect("Failed to parse poly");
+
+        // Get hardcoded point
+        let x = backend
+            .parse_point_from_str(TEST_POINT)
+            .expect("Failed to parse point");
+        debug!("x: {:?}", hex::encode(x.to_bytes()));
+
+        // Evaluate poly at point and check against hardcoded value
+        let y = poly.eval(&x);
+        let expected = backend
+            .parse_point_from_str(TEST_EVAL)
+            .expect("Failed to parse point");
+        debug!("y: {:?}", hex::encode(y.to_bytes()));
+        assert_eq!(y, expected);
+
+        // Commit to poly
+        let commitment = backend
+            .commit_to_poly(poly.clone())
+            .expect("Failed to commit to poly");
+        debug!("commitment hex: {:?}", hex::encode(commitment.to_bytes()));
+
+        // Compute proof
+        let proof = backend
+            .compute_proof_single(poly.clone(), x)
+            .expect("Failed to compute proof");
+        debug!("proof hex: {:?}", hex::encode(proof.to_bytes()));
+
+        // Verify proof
+        let result = backend
+            .verify_proof_single(proof, x, y, commitment)
+            .expect("Failed to verify proof");
+        assert!(result);
+
+        std::fs::remove_file(path).unwrap();
+    }
 }

@@ -60,7 +60,7 @@ impl RunArgs {
     }
 }
 
-fn setup(args: SetupArgs) {
+pub(crate) fn setup(args: SetupArgs) {
     if let Some(path) = &args.path {
         if std::path::Path::new(path).exists() {
             if args.overwrite {
