@@ -481,7 +481,12 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new(port: Option<u16>, host: Option<String>, path: Option<String>, scale: Option<usize>) -> Self {
+    pub fn new(
+        port: Option<u16>,
+        host: Option<String>,
+        path: Option<String>,
+        scale: Option<usize>,
+    ) -> Self {
         let server = ServerConfig::new(port, host);
         let backend = crate::engine::backend::BackendConfig::new(scale, path);
         Config { server, backend }
@@ -536,10 +541,10 @@ impl Server {
     where
         B: crate::engine::backend::Backend + Send + Sync + 'static,
     {
-        info!("Starting server...");
+        info!("Starting RPC server...");
         let listener = tokio::net::TcpListener::bind(&self.addr()).await?;
         info!("Listening on: {}", self.addr());
-        let handler = self.new_handler::<B>();
+        let handler = crate::utils::timed("start handler", || self.new_handler::<B>());
 
         loop {
             let (stream, _) = listener.accept().await?;
@@ -560,13 +565,14 @@ impl Server {
     }
 }
 
-pub async fn start_rpc_server<B>(cfg: Config) 
+pub async fn start_rpc_server<B>(cfg: Config)
 where
     B: crate::engine::backend::Backend + Send + Sync + 'static,
 {
-    info!("Starting RPC server...");
     let server = Server::new(cfg);
-    server.run::<B>().await.unwrap();
+    if let Err(e) = server.run::<B>().await {
+        error!("Error: {}", e);
+    }
 }
 
 #[cfg(test)]

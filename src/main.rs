@@ -1,9 +1,12 @@
 pub mod engine;
 pub mod rpc;
+pub mod utils;
+
 use kzg::G1;
 use kzg::G2;
 use std::io::Write;
-use tracing::info;
+use tracing::error;
+use tracing::warn;
 
 use crate::engine::backend::Backend as _;
 use crate::engine::{backend::BackendConfig, blst::BlstBackend as Backend};
@@ -33,6 +36,10 @@ enum SubCommand {
 struct SetupArgs {
     #[clap(short, long)]
     path: Option<String>,
+    #[clap(short, long)]
+    scale: Option<usize>,
+    #[clap(short, long)]
+    overwrite: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -53,30 +60,43 @@ impl RunArgs {
     }
 }
 
-fn write_setup(args: SetupArgs) {
-    info!("Generating setup");
-    let cfg = BackendConfig::new(Some(20), None);
-    let backend = Backend::new(Some(cfg.clone()));
+fn setup(args: SetupArgs) {
+    if let Some(path) = &args.path {
+        if std::path::Path::new(path).exists() {
+            if args.overwrite {
+                warn!("File already exists, will be overwritten");
+            } else {
+                error!("File already exists, use --overwrite to overwrite");
+                return;
+            }
+        }
+    }
 
-    info!("Writing setup to file");
+    let backend = utils::timed("setup", || {
+        let cfg = BackendConfig::new(args.scale, None);
+        Backend::new(Some(cfg.clone()))
+    });
+
     let file_path = args.path.unwrap_or("setup".to_string());
     let mut file = std::fs::File::create(file_path).unwrap();
-    let encoded_s1_size = backend.kzg_settings.secret_g1.len() as u64;
 
-    info!("Writing s1");
-    Write::write(&mut file, &encoded_s1_size.to_le_bytes()).unwrap();
-    for el in backend.kzg_settings.secret_g1 {
-        let bytes = el.to_bytes();
-        Write::write(&mut file, &bytes).unwrap();
-    }
+    utils::timed("writing s1", || {
+        let encoded_s1_size = backend.kzg_settings.secret_g1.len() as u64;
+        Write::write(&mut file, &encoded_s1_size.to_le_bytes()).unwrap();
+        for el in backend.kzg_settings.secret_g1.iter() {
+            let bytes = el.to_bytes();
+            Write::write(&mut file, &bytes).unwrap();
+        }
+    });
 
-    info!("Writing s2");
-    let encoded_s2_size = backend.kzg_settings.secret_g2.len() as u64;
-    Write::write(&mut file, &encoded_s2_size.to_le_bytes()).unwrap();
-    for el in backend.kzg_settings.secret_g2 {
-        let bytes = el.to_bytes();
-        Write::write(&mut file, &bytes).unwrap();
-    }
+    utils::timed("writing s2", || {
+        let encoded_s2_size = backend.kzg_settings.secret_g2.len() as u64;
+        Write::write(&mut file, &encoded_s2_size.to_le_bytes()).unwrap();
+        for el in backend.kzg_settings.secret_g2.iter() {
+            let bytes = el.to_bytes();
+            Write::write(&mut file, &bytes).unwrap();
+        }
+    });
 }
 
 async fn run_server(args: RunArgs) {
@@ -92,7 +112,7 @@ async fn main() {
         .init();
     let cli = CLi::parse();
     match cli.subcmd {
-        SubCommand::Setup(args) => write_setup(args),
+        SubCommand::Setup(args) => setup(args),
         SubCommand::Run(args) => run_server(args).await,
     }
 }

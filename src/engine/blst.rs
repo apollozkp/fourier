@@ -1,14 +1,12 @@
 use kzg::{FFTSettings, Fr, KZGSettings, Poly, G1, G2};
 use rand::Rng;
 use rayon::prelude::*;
-use rust_kzg_blst::types::{
-    g1::FsG1,
-    g2::FsG2,
-};
+use rust_kzg_blst::types::{g1::FsG1, g2::FsG2};
 use rust_kzg_blst::utils::generate_trusted_setup;
 // use rust_kzg_blst::kzg_types::{FsG1, FsG2};
-use std::io::Read;
-use tracing::{debug, info};
+use crate::utils::timed;
+use std::io::{Read, Write};
+use tracing::{debug, info, warn};
 
 pub struct BlstBackend {
     pub fft_settings: rust_kzg_blst::types::fft_settings::FsFFTSettings,
@@ -21,87 +19,122 @@ impl BlstBackend {
         let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
         let mut reader = std::io::BufReader::new(file);
 
-        let mut g1_size_bytes = [0u8; 8];
-        reader
-            .read_exact(&mut g1_size_bytes)
-            .map_err(|e| e.to_string())?;
-        let g1_size = u64::from_le_bytes(g1_size_bytes);
-        debug!("read g1_size: {:?}", g1_size);
+        let g1_raw: Result<Vec<[u8; 48]>, String> = timed("read g1", || {
+            let mut g1_size_bytes = [0u8; 8];
+            reader
+                .read_exact(&mut g1_size_bytes)
+                .map_err(|e| e.to_string())?;
+            let g1_size = u64::from_le_bytes(g1_size_bytes);
 
-        let g1_raw = (0..g1_size as usize).try_fold(
-            Vec::with_capacity(g1_size as usize),
-            |mut acc, _| {
-                let mut g1_bytes = [0u8; 48];
-                match reader.read_exact(&mut g1_bytes) {
-                    Ok(_) => (),
-                    Err(e) => return Err(e.to_string()),
-                }
-                acc.push(g1_bytes);
-                Ok(acc)
-            },
-        )?;
+            let g1_raw = (0..g1_size as usize).try_fold(
+                Vec::with_capacity(g1_size as usize),
+                |mut acc, _| {
+                    let mut g1_bytes = [0u8; 48];
+                    match reader.read_exact(&mut g1_bytes) {
+                        Ok(_) => (),
+                        Err(e) => return Err(e.to_string()),
+                    }
+                    acc.push(g1_bytes);
+                    Ok(acc)
+                },
+            )?;
 
-        let mut g2_size_bytes = [0u8; 8];
-        reader
-            .read_exact(&mut g2_size_bytes)
-            .map_err(|e| e.to_string())?;
-        let g2_size = u64::from_le_bytes(g2_size_bytes);
-        debug!("read g2_size: {:?}", g2_size);
+            Ok(g1_raw)
+        });
 
-        let g2_raw = (0..g2_size as usize).try_fold(
-            Vec::with_capacity(g2_size as usize),
-            |mut acc, _| {
-                let mut g2_bytes = [0u8; 96];
-                match reader.read_exact(&mut g2_bytes) {
-                    Ok(_) => (),
-                    Err(e) => return Err(e.to_string()),
-                }
-                acc.push(g2_bytes);
-                Ok(acc)
-            },
-        )?;
+        let g2_raw: Result<Vec<[u8; 96]>, String> = timed("read g2", || {
+            let mut g2_size_bytes = [0u8; 8];
+            reader
+                .read_exact(&mut g2_size_bytes)
+                .map_err(|e| e.to_string())?;
+            let g2_size = u64::from_le_bytes(g2_size_bytes);
+
+            let g2_raw = (0..g2_size as usize).try_fold(
+                Vec::with_capacity(g2_size as usize),
+                |mut acc, _| {
+                    let mut g2_bytes = [0u8; 96];
+                    match reader.read_exact(&mut g2_bytes) {
+                        Ok(_) => (),
+                        Err(e) => return Err(e.to_string()),
+                    }
+                    acc.push(g2_bytes);
+                    Ok(acc)
+                },
+            )?;
+
+            Ok(g2_raw)
+        });
 
         let cores = num_cpus::get();
         debug!("splitting work over {} cores", cores);
 
-        debug!("parsing g1...");
-        let chunk_size = g1_size as usize / cores;
-        let g1 = g1_raw
-            .par_chunks(chunk_size)
-            .map(|chunk| {
-                debug!("parsing chunk with size: {}", chunk.len());
-                chunk
-                    .iter()
-                    .map(|x| {
-                        FsG1::from_bytes(x.as_slice()).expect("Failed to parse G1")
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .flatten()
-            .collect::<Vec<_>>();
+        let g1: Result<Vec<FsG1>, String> = timed("parse g1", || {
+            let g1_raw = g1_raw?;
+            let chunk_size = g1_raw.len() / cores;
+            let g1 = g1_raw
+                .par_chunks(chunk_size)
+                .map(|chunk| {
+                    chunk
+                        .iter()
+                        .map(|x| FsG1::from_bytes(x.as_slice()).expect("Failed to parse G1"))
+                        .collect::<Vec<_>>()
+                })
+                .flatten()
+                .collect::<Vec<_>>();
 
-        debug!("parsing g2...");
-        let chunk_size = g2_size as usize / cores;
-        let g2 = g2_raw
-            .par_chunks(chunk_size)
-            .map(|chunk| {
-                debug!("parsing chunk with size: {}", chunk.len());
-                chunk
-                    .iter()
-                    .map(|x| {
-                        FsG2::from_bytes(x.as_slice()).expect("Failed to parse G2")
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .flatten()
-            .collect::<Vec<_>>();
+            Ok(g1)
+        });
 
-        debug!("done parsing from file");
-        Ok((g1, g2))
+        let g2: Result<Vec<FsG2>, String> = timed("parse g2", || {
+            let g2_raw = g2_raw?;
+            let chunk_size = g2_raw.len() / cores;
+            let g2 = g2_raw
+                .par_chunks(chunk_size)
+                .map(|chunk| {
+                    chunk
+                        .iter()
+                        .map(|x| FsG2::from_bytes(x.as_slice()).expect("Failed to parse G2"))
+                        .collect::<Vec<_>>()
+                })
+                .flatten()
+                .collect::<Vec<_>>();
+
+            Ok(g2)
+        });
+
+        Ok((g1?, g2?))
     }
 
     fn generate_trusted_setup(max_width: usize, secret: [u8; 32usize]) -> (Vec<FsG1>, Vec<FsG2>) {
         generate_trusted_setup(max_width, secret)
+    }
+
+    fn new_fft_settings(
+        scale: usize,
+    ) -> Result<rust_kzg_blst::types::fft_settings::FsFFTSettings, String> {
+        rust_kzg_blst::types::fft_settings::FsFFTSettings::new(scale)
+    }
+
+    fn new_kzg_settings(
+        s1: &[FsG1],
+        s2: &[FsG2],
+        max_width: usize,
+        fft_settings: &rust_kzg_blst::types::fft_settings::FsFFTSettings,
+    ) -> Result<rust_kzg_blst::types::kzg_settings::FsKZGSettings, String> {
+        rust_kzg_blst::types::kzg_settings::FsKZGSettings::new(s1, s2, max_width, fft_settings)
+    }
+
+    fn save_precompute(&self, path: &str) -> Result<(), String> {
+        match self.kzg_settings.get_precomputation() {
+            Some(precompute) => {
+                let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+                let mut writer = std::io::BufWriter::new(file);
+                todo!()
+            }
+            None => return Err("Precomputation not available".to_string()),
+        }
+
+        Ok(())
     }
 }
 
@@ -116,32 +149,30 @@ impl crate::engine::backend::Backend for BlstBackend {
     type G1Affine = rust_kzg_blst::types::g1::FsG1Affine;
 
     fn new(cfg: Option<crate::engine::backend::BackendConfig>) -> Self {
-        info!("Creating new FsworksBackend...");
         let scale = cfg
             .as_ref()
             .and_then(|cfg| cfg.scale)
             .unwrap_or(Self::DEFAULT_SCALE);
-        let fft_settings = Self::FFTSettings::new(scale)
+        let fft_settings = timed("Creating FFTSettings", || Self::new_fft_settings(scale))
             .expect("Failed to create FFTSettings");
 
         let (s1, s2) = if let Some(path) = cfg.as_ref().and_then(|cfg| cfg.path.as_ref()) {
-            info!("Reading setup from file");
-            Self::new_from_file(path).expect("Failed to read setup from file")
+            timed("Reading setup from file", || {
+                Self::new_from_file(path).expect("Failed to read setup from file")
+            })
         } else {
-            info!("No setup file provided, generating new setup");
-            let secret: [u8; 32] = rand::thread_rng().gen();
-            Self::generate_trusted_setup(fft_settings.get_max_width(), secret)
+            warn!("No setup file provided, generating new setup");
+            timed("Generating trusted setup", || {
+                let secret: [u8; 32] = rand::thread_rng().gen();
+                Self::generate_trusted_setup(fft_settings.get_max_width(), secret)
+            })
         };
 
-        info!("Creating KZGSettings...");
-        let kzg_settings = KZGSettings::new(
-            &s1,
-            &s2,
-            fft_settings.get_max_width(),
-            &fft_settings,
-        )
-        .expect("Failed to create KZGSettings");
-        info!("Created new FsworksBackend");
+        let kzg_settings = timed("Creating KZGSettings", || {
+            Self::new_kzg_settings(&s1, &s2, fft_settings.get_max_width(), &fft_settings)
+                .expect("Failed to create KZGSettings")
+        });
+
         Self {
             fft_settings,
             kzg_settings,
@@ -260,7 +291,7 @@ mod tests {
         let cfg = crate::engine::backend::BackendConfig::new(Some(4), None);
         let backend = BlstBackend::new(Some(cfg.clone()));
         let poly = backend.random_poly();
-        tracing::info!("poly: {:?}", poly.clone());
+        debug!("poly: {:?}", poly.clone());
         let x = backend.random_fr();
         let y = poly.eval(&x);
         let commitment = backend.commit_to_poly(poly.clone()).unwrap();
@@ -272,11 +303,12 @@ mod tests {
     }
 
     #[test]
+    #[tracing_test::traced_test]
     fn test_arkworks_g1_serialize_deserialize() {
         let cfg = crate::engine::backend::BackendConfig::new(Some(4), None);
         let backend = BlstBackend::new(Some(cfg.clone()));
         let g1 = backend.random_g1();
-        println!("g1: {:?}", g1);
+        debug!("g1: {:?}", g1);
         let g1_bytes = g1.to_bytes();
         let reserialized = FsG1::from_bytes(&g1_bytes);
         assert_eq!(reserialized, Ok(g1));
@@ -303,28 +335,28 @@ mod tests {
     //     let x = backend
     //         .parse_point_from_str(TEST_POINT)
     //         .expect("Failed to parse point");
-    //     println!("x: {:?}", hex::encode(x.to_bytes()));
+    //     debug!("x: {:?}", hex::encode(x.to_bytes()));
     //
     //     // Evaluate poly at point and check against hardcoded value
     //     let y = poly.eval(&x);
     //     let expected = backend
     //         .parse_point_from_str(TEST_EVAL)
     //         .expect("Failed to parse point");
-    //     println!("y: {:?}", hex::encode(y.to_bytes()));
+    //     debug!("y: {:?}", hex::encode(y.to_bytes()));
     //     assert_eq!(y, expected);
     //
     //     // Commit to poly and check against hardcoded commitment
     //     let commitment = backend
     //         .commit_to_poly(poly.clone())
     //         .expect("Failed to commit to poly");
-    //     println!("commitment hex: {:?}", hex::encode(commitment.to_bytes()));
+    //     debug!("commitment hex: {:?}", hex::encode(commitment.to_bytes()));
     //     assert_eq!(hex::encode(commitment.to_bytes()), EXPECTED_COMMITMENT);
     //
     //     // Compute proof and check against hardcoded proof
     //     let proof = backend
     //         .compute_proof_single(poly.clone(), x)
     //         .expect("Failed to compute proof");
-    //     println!("proof hex: {:?}", hex::encode(proof.to_bytes()));
+    //     debug!("proof hex: {:?}", hex::encode(proof.to_bytes()));
     //     assert_eq!(hex::encode(proof.to_bytes()), EXPECTED_PROOF);
     //
     //     // Verify proof
@@ -333,34 +365,4 @@ mod tests {
     //         .expect("Failed to verify proof");
     //     assert!(result);
     // }
-
-    #[test]
-    #[tracing_test::traced_test]
-    fn write_setup() {
-        use kzg::G2;
-        use std::io::Write;
-        use tracing::info;
-
-        info!("Generating setup");
-        let cfg = crate::engine::backend::BackendConfig::new(Some(20), None);
-        let backend = BlstBackend::new(Some(cfg.clone()));
-
-        let mut file = std::fs::File::create("setup").unwrap();
-
-        info!("Writing s1");
-        let encoded_s1_size = backend.kzg_settings.secret_g1.len() as u64;
-        Write::write(&mut file, &encoded_s1_size.to_le_bytes()).unwrap();
-        for el in backend.kzg_settings.secret_g1 {
-            let bytes = el.to_bytes();
-            Write::write(&mut file, &bytes).unwrap();
-        }
-
-        info!("Writing s2");
-        let encoded_s2_size = backend.kzg_settings.secret_g2.len() as u64;
-        Write::write(&mut file, &encoded_s2_size.to_le_bytes()).unwrap();
-        for el in backend.kzg_settings.secret_g2 {
-            let bytes = el.to_bytes();
-            Write::write(&mut file, &bytes).unwrap();
-        }
-    }
 }

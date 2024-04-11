@@ -6,10 +6,12 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-kzg = { git = "https://github.com/grandinetech/rust-kzg.git" }
-# rust-kzg-arkworks = { git = "https://github.com/grandinetech/rust-kzg.git" }
-rust-kzg-blst = { git = "https://github.com/grandinetech/rust-kzg.git" }
+# kzg
+kzg = { git = "https://github.com/grandinetech/rust-kzg.git", features = ["parallel"]}
+rust-kzg-blst = { git = "https://github.com/grandinetech/rust-kzg.git", features = ["parallel", "bgmw"]}
 
+# kzg = { path = "../rust-kzg/kzg", features = ["parallel"]}
+# rust-kzg-blst = { path = "../rust-kzg/blst", features = ["parallel", "bgmw"]}
 # rpc
 tokio = { version = "1.37", features = ["macros", "full"] }
 tracing = "0.1.40"
