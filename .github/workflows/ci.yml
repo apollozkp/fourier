@@ -18,17 +18,24 @@ jobs:
         profile: minimal
         toolchain: stable
         override: true
+        components: llvm-tools-preview
 
-    - name: Build
-      uses: actions-rs/cargo@v1
-      with:
-        command: build
-        args: --release
+    - name: Install grcov
+      run: cargo install grcov
 
     - name: Run tests
-      uses: actions-rs/cargo@v1
+      run: |
+        export CARGO_INCREMENTAL=0
+        export RUSTFLAGS="-Zinstrument-coverage"
+        export LLVM_PROFILE_FILE="your_project_name-%p-%m.profraw"
+        cargo test
+        grcov . --binary-path ./target/debug/ -s . -t lcov --branch --ignore-not-existing --ignore "/*" -o ./coverage.lcov
+
+    - name: Upload to Coveralls
+      uses: coverallsapp/github-action@master
       with:
-        command: test
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        path-to-lcov: ./coverage.lcov
 
   run-python-script:
     name: Run Python Script
