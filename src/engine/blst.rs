@@ -20,93 +20,9 @@ pub struct BlstBackend {
 impl BlstBackend {
     const DEFAULT_SCALE: usize = 20;
     fn load_secrets_from_file(path: &str) -> Result<(Vec<FsG1>, Vec<FsG2>), String> {
-        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-        let mut reader = std::io::BufReader::new(file);
-
-        let g1_raw: Result<Vec<[u8; 48]>, String> = timed("read g1", || {
-            let mut g1_size_bytes = [0u8; 8];
-            reader
-                .read_exact(&mut g1_size_bytes)
-                .map_err(|e| e.to_string())?;
-            let g1_size = u64::from_le_bytes(g1_size_bytes);
-
-            let g1_raw = (0..g1_size as usize).try_fold(
-                Vec::with_capacity(g1_size as usize),
-                |mut acc, _| {
-                    let mut g1_bytes = [0u8; 48];
-                    match reader.read_exact(&mut g1_bytes) {
-                        Ok(_) => (),
-                        Err(e) => return Err(e.to_string()),
-                    }
-                    acc.push(g1_bytes);
-                    Ok(acc)
-                },
-            )?;
-
-            Ok(g1_raw)
-        });
-
-        let g2_raw: Result<Vec<[u8; 96]>, String> = timed("read g2", || {
-            let mut g2_size_bytes = [0u8; 8];
-            reader
-                .read_exact(&mut g2_size_bytes)
-                .map_err(|e| e.to_string())?;
-            let g2_size = u64::from_le_bytes(g2_size_bytes);
-
-            let g2_raw = (0..g2_size as usize).try_fold(
-                Vec::with_capacity(g2_size as usize),
-                |mut acc, _| {
-                    let mut g2_bytes = [0u8; 96];
-                    match reader.read_exact(&mut g2_bytes) {
-                        Ok(_) => (),
-                        Err(e) => return Err(e.to_string()),
-                    }
-                    acc.push(g2_bytes);
-                    Ok(acc)
-                },
-            )?;
-
-            Ok(g2_raw)
-        });
-
-        let cores = num_cpus::get();
-        debug!("splitting work over {} cores", cores);
-
-        let g1: Result<Vec<FsG1>, String> = timed("parsing secret g1", || {
-            let g1_raw = g1_raw?;
-            let chunk_size = g1_raw.len() / cores;
-            let g1 = g1_raw
-                .par_chunks(chunk_size)
-                .map(|chunk| {
-                    chunk
-                        .iter()
-                        .map(|x| FsG1::from_bytes(x.as_slice()).expect("Failed to parse G1"))
-                        .collect::<Vec<_>>()
-                })
-                .flatten()
-                .collect::<Vec<_>>();
-
-            Ok(g1)
-        });
-
-        let g2: Result<Vec<FsG2>, String> = timed("parsing secret g2", || {
-            let g2_raw = g2_raw?;
-            let chunk_size = g2_raw.len() / cores;
-            let g2 = g2_raw
-                .par_chunks(chunk_size)
-                .map(|chunk| {
-                    chunk
-                        .iter()
-                        .map(|x| FsG2::from_bytes(x.as_slice()).expect("Failed to parse G2"))
-                        .collect::<Vec<_>>()
-                })
-                .flatten()
-                .collect::<Vec<_>>();
-
-            Ok(g2)
-        });
-
-        Ok((g1?, g2?))
+        crate::utils::timed("reading secrets", || {
+            rust_kzg_blst::utils::load_secrets_from_file(path)
+        })
     }
 
     pub fn save_secrets_to_file(
@@ -114,28 +30,9 @@ impl BlstBackend {
         secret_g1: &[FsG1],
         secret_g2: &[FsG2],
     ) -> Result<(), String> {
-        use std::io::Write;
-        let mut file = std::fs::File::create(file_path).unwrap();
-
-        crate::utils::timed("writing s1", || {
-            let encoded_s1_size = secret_g1.len() as u64;
-            Write::write(&mut file, &encoded_s1_size.to_le_bytes()).unwrap();
-            for el in secret_g1.iter() {
-                let bytes = el.to_bytes();
-                Write::write(&mut file, &bytes).unwrap();
-            }
-        });
-
-        crate::utils::timed("writing s2", || {
-            let encoded_s2_size = secret_g2.len() as u64;
-            Write::write(&mut file, &encoded_s2_size.to_le_bytes()).unwrap();
-            for el in secret_g2.iter() {
-                let bytes = el.to_bytes();
-                Write::write(&mut file, &bytes).unwrap();
-            }
-        });
-
-        Ok(())
+        crate::utils::timed("writing secrets", || {
+            rust_kzg_blst::utils::save_secrets_to_file(file_path, secret_g1, secret_g2)
+        })
     }
 
     pub fn load_precompute_from_file(
