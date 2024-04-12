@@ -3,3 +3,9 @@
 *.egg
 *.egg-info
 build
+precompute
+secrets
+setup
+test_secrets
+test_setup
+test_precompute

@@ -9,6 +9,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tracing::{error, info};
 
+use crate::RunArgs;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct JsonRpcRequest {
     jsonrpc: String,
@@ -467,40 +469,30 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ServerConfig {
+#[derive(Debug, Clone, Default)]
+pub struct Config {
     pub host: String,
-    pub port: u16,
-    pub backend: Option<crate::engine::backend::BackendConfig>,
+    pub port: usize,
+    pub backend: crate::engine::config::BackendConfig,
 }
 
-impl ServerConfig {
-    pub fn new(port: u16) -> Self {
-        ServerConfig {
-            host: "127.0.0.1".to_owned(),
-            port,
-            backend: None,
-        }
-    }
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        ServerConfig {
-            host: "127.0.0.1".to_owned(),
-            port: 1337,
-            backend: None,
+impl From<RunArgs> for Config {
+    fn from(args: RunArgs) -> Self {
+        Config {
+            host: args.host.clone(),
+            port: args.port,
+            backend: args.into(),
         }
     }
 }
 
 #[derive(Debug, Default)]
 pub struct Server {
-    cfg: ServerConfig,
+    cfg: Config,
 }
 
 impl Server {
-    pub fn new(cfg: ServerConfig) -> Self {
+    pub fn new(cfg: Config) -> Self {
         Server { cfg }
     }
 
@@ -512,7 +504,7 @@ impl Server {
     where
         B: crate::engine::backend::Backend,
     {
-        let backend = B::new(self.cfg.backend.clone());
+        let backend = B::new(Some(self.cfg.backend.clone()));
         RpcHandler::new(Arc::new(backend))
     }
 
@@ -520,10 +512,10 @@ impl Server {
     where
         B: crate::engine::backend::Backend + Send + Sync + 'static,
     {
-        info!("Starting server...");
+        info!("Starting RPC server...");
         let listener = tokio::net::TcpListener::bind(&self.addr()).await?;
         info!("Listening on: {}", self.addr());
-        let handler = self.new_handler::<B>();
+        let handler = crate::utils::timed("start handler", || self.new_handler::<B>());
 
         loop {
             let (stream, _) = listener.accept().await?;
@@ -544,18 +536,14 @@ impl Server {
     }
 }
 
-pub async fn start_rpc_server<B>(port: u16)
+pub async fn start_rpc_server<B>(cfg: Config)
 where
     B: crate::engine::backend::Backend + Send + Sync + 'static,
 {
-    // init tracing subscriber and write to stdout
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stdout)
-        .init();
-    info!("Starting RPC server...");
-    let config = ServerConfig::new(port);
-    let server = Server::new(config);
-    server.run::<B>().await.unwrap();
+    let server = Server::new(cfg);
+    if let Err(e) = server.run::<B>().await {
+        error!("Error: {}", e);
+    }
 }
 
 #[cfg(test)]

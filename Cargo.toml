@@ -6,19 +6,25 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-kzg = { git = "https://github.com/grandinetech/rust-kzg.git" }
-rust-kzg-arkworks = { git = "https://github.com/grandinetech/rust-kzg.git" }
+# kzg
+kzg = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel"], branch = "precompute_to_file"}
+rust-kzg-blst = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel", "bgmw"], branch = "precompute_to_file"}
 
+# kzg = { path = "../rust-kzg/kzg", features = ["parallel"]}
+# rust-kzg-blst = { path = "../rust-kzg/blst", features = ["parallel", "bgmw"]}
 # rpc
 tokio = { version = "1.37", features = ["macros", "full"] }
 tracing = "0.1.40"
 tracing-test = "0.2.4"
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.115"
-reqwest = "0.12.2"
 hex = "0.4.3"
 hyper-util = { version = "0.1.3", features = ["full"] }
 hyper = { version = "1.2.0", features = ["full"] }
 http-body-util = "0.1.1"
 tracing-subscriber = "0.3.18"
 clap = { version = "4.5.4", features = ["derive"] }
+rand = "0.8"
+rayon = "1.5.1"
+
+num_cpus = "1.16.0"
