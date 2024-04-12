@@ -8,7 +8,7 @@ import requests
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 1337
 DEFAULT_BIN = "target/release/fourier"
-DEFAULT_SECRETS_PATH = "secrets"
+DEFAULT_SECRETS_PATH = "setup"
 DEFAULT_PRECOMPUTE_PATH = "precompute"
 DEFAULT_SKIP_PRECOMPUTE = False
 

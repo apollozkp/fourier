@@ -103,7 +103,7 @@ impl BlstBackend {
         secrets_path: Option<String>,
         precompute_path: Option<String>,
     ) -> Result<(), String> {
-        const DEFAULT_SECRETS_PATH: &str = "secrets";
+        const DEFAULT_SECRETS_PATH: &str = "setup";
         Self::save_secrets_to_file(
             &secrets_path.unwrap_or(DEFAULT_SECRETS_PATH.to_owned()),
             &self.kzg_settings.secret_g1,
