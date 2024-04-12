@@ -8,7 +8,7 @@ import requests
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 1337
 DEFAULT_BIN = "target/release/fourier"
-DEFAULT_SECRETS_PATH = "setup"
+DEFAULT_SETUP_PATH = "setup"
 DEFAULT_PRECOMPUTE_PATH = "precompute"
 DEFAULT_SKIP_PRECOMPUTE = False
 
@@ -64,6 +64,9 @@ class RPCRequest:
 
 class CLI:
     def __init__(self, bin=DEFAULT_BIN):
+        if not os.path.exists(bin):
+            print(f"Binary does not exist: {bin}")
+            raise FileNotFoundError
         self.bin = bin
         self.process = None
 
@@ -89,14 +92,13 @@ class CLI:
         host=None,
         port=None,
         scale=None,
-        secrets_path=None,
+        setup_path=None,
         precompute_path=None,
-        skip_precompute=False,
     ) -> bool:
         HOST_LONG = "--host"
         PORT_LONG = "--port"
         SCALE_LONG = "--scale"
-        SECRETS_PATH_LONG = "--secrets-path"
+        SETUP_PATH_LONG = "--setup-path"
         PRECOMPUTE_PATH_LONG = "--precompute-path"
         args = ["run"]
         if host:
@@ -105,8 +107,8 @@ class CLI:
             args.extend([PORT_LONG, str(port)])
         if scale:
             args.extend([SCALE_LONG, str(scale)])
-        if secrets_path:
-            args.extend([SECRETS_PATH_LONG, secrets_path])
+        if setup_path:
+            args.extend([SETUP_PATH_LONG, setup_path])
         if precompute_path:
             args.extend([PRECOMPUTE_PATH_LONG, precompute_path])
         print(f"Running: {self.cmd(args)}")
@@ -114,17 +116,23 @@ class CLI:
         return self.wait_until_running()
 
     def setup(
-        self, secrets_path=None, overwrite=False, scale=None, precompute_path=None, generate_secrets=False, generate_precompute=False
+        self,
+        setup_path=None,
+        overwrite=False,
+        scale=None,
+        precompute_path=None,
+        generate_secrets=False,
+        generate_precompute=False,
     ):
-        SECRETS_PATH_LONG = "--secrets-path"
+        SETUP_PATH_LONG = "--setup-path"
         PRECOMPUTE_PATH_LONG = "--precompute-path"
         SCALE_LONG = "--scale"
         OVERWRITE_LONG = "--overwrite"
         GENERATE_SECRETS_LONG = "--generate-secrets"
         GENERATE_PRECOMPUTE_LONG = "--generate-precompute"
         args = ["setup"]
-        if secrets_path:
-            args.extend([SECRETS_PATH_LONG, secrets_path])
+        if setup_path:
+            args.extend([SETUP_PATH_LONG, setup_path])
         if precompute_path:
             args.extend([PRECOMPUTE_PATH_LONG, precompute_path])
         if overwrite:
@@ -148,27 +156,34 @@ class CLI:
 
 
 class Client:
-    def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT):
+    def __init__(
+        self,
+        host=DEFAULT_HOST,
+        port=DEFAULT_PORT,
+        setup_path=DEFAULT_SETUP_PATH,
+        precompute_path=DEFAULT_PRECOMPUTE_PATH,
+    ):
         self.host = host
         self.port = port
         self.cli = CLI()
+        self.setup_path = setup_path if os.path.exists(setup_path) else None
+        self.precompute_path = (
+            precompute_path if os.path.exists(precompute_path) else None
+        )
 
     def endpoint(self):
         return f"http://{self.host}:{self.port}"
 
     def start_rust(
         self,
-        default_bin=DEFAULT_BIN,
-        secrets_path=DEFAULT_SECRETS_PATH,
-        precompute_path=DEFAULT_PRECOMPUTE_PATH,
-        skip_precompute=DEFAULT_SKIP_PRECOMPUTE,
+        scale=None,
     ) -> bool:
         self.cli.run(
             host=self.host,
             port=self.port,
-            secrets_path=secrets_path,
-            precompute_path=precompute_path,
-            skip_precompute=skip_precompute,
+            setup_path=self.setup_path,
+            precompute_path=self.precompute_path,
+            scale=scale,
         )
         return self.cli.is_running()
 
@@ -177,12 +192,9 @@ class Client:
 
     def start(
         self,
-        default_bin=DEFAULT_BIN,
-        secrets_path=DEFAULT_SECRETS_PATH,
-        precompute_path=DEFAULT_PRECOMPUTE_PATH,
-        skip_precompute=DEFAULT_SKIP_PRECOMPUTE,
+        scale=None,
     ) -> bool:
-        if not self.start_rust():
+        if not self.start_rust(scale=scale):
             return False
         if not self.ping().ok:
             print("Failed to ping Rust server.")
@@ -320,8 +332,15 @@ if __name__ == "__main__":
     os.environ["RUST_LOG"] = "debug"
     HOST = "localhost"
     PORT = 1337
-    rpc = Client(host=HOST, port=PORT)
-    rpc.start()
+    SETUP_PATH = "setup"
+    PRECOMPUTE_PATH = "precompute"
+    setup_path = SETUP_PATH if os.path.exists(SETUP_PATH) else None
+
+    rpc = Client(
+        host=HOST, port=PORT, setup_path=SETUP_PATH, precompute_path=PRECOMPUTE_PATH
+    )
+    precompute_path = PRECOMPUTE_PATH if os.path.exists(PRECOMPUTE_PATH) else None
+    rpc.start(scale=4)
 
     # Generate initial params
     f = random_poly(rpc, 10)

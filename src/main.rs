@@ -26,7 +26,7 @@ enum SubCommand {
 struct RunArgs {
     // Path to the file where the setup is saved, omit to generate a new setup
     #[clap(long)]
-    secrets_path: Option<String>,
+    setup_path: Option<String>,
 
     // Path to the file where the precomputed values are saved, omit to generate a new setup
     #[clap(long)]
@@ -49,7 +49,7 @@ struct RunArgs {
 struct SetupArgs {
     // Path to the file where the setup is saved
     #[clap(long, default_value = "setup")]
-    secrets_path: String,
+    setup_path: String,
 
     // Path to the file where the precomputed values are saved
     #[clap(long, default_value = "precompute")]
@@ -77,10 +77,10 @@ impl SetupArgs {
         fn path_exists(path: &str) -> bool {
             std::path::Path::new(path).exists()
         }
-        if path_exists(&self.secrets_path) && !self.overwrite {
+        if path_exists(&self.setup_path) && !self.overwrite {
             error!(
                 "File {} already exists, use --overwrite to overwrite",
-                self.secrets_path
+                self.setup_path
             );
             return false;
         }

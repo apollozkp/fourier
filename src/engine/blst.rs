@@ -117,10 +117,10 @@ impl BlstBackend {
 
     pub fn save_to_file(
         &self,
-        secrets_path: Option<&str>,
+        setup_path: Option<&str>,
         precompute_path: Option<&str>,
     ) -> Result<(), String> {
-        if let Some(path) = secrets_path {
+        if let Some(path) = setup_path {
             Self::save_secrets_to_file(
                 path,
                 &self.kzg_settings.secret_g1,
@@ -171,7 +171,7 @@ impl crate::engine::backend::Backend for BlstBackend {
             })
         } else {
             timed("Reading secrets from file", || {
-                Self::load_secrets_from_file(cfg.secrets_path())
+                Self::load_secrets_from_file(cfg.setup_path())
                     .expect("Failed to read setup from file")
             })
         };
@@ -242,7 +242,7 @@ impl crate::engine::backend::Backend for BlstBackend {
 
     fn setup_and_save(cfg: SetupConfig) -> Result<(), String> {
         let backend = Self::setup(cfg.clone())?;
-        backend.save_to_file(Some(cfg.secrets_path()), Some(cfg.precompute_path()))
+        backend.save_to_file(Some(cfg.setup_path()), Some(cfg.precompute_path()))
     }
 }
 
@@ -332,11 +332,11 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_write_and_load_precompute() {
-        const SECRETS_PATH: &str = "test_setup";
+        const SETUP_PATH: &str = "test_setup";
         const PRECOMPUTE_PATH: &str = "test_precompute";
         const SCALE: usize = 4;
         let cfg = SetupConfig {
-            secrets_path: SECRETS_PATH.to_owned(),
+            setup_path: SETUP_PATH.to_owned(),
             precompute_path: PRECOMPUTE_PATH.to_owned(),
             scale: SCALE,
             overwrite: false,
@@ -345,11 +345,11 @@ mod tests {
         };
         let backend = BlstBackend::setup(cfg).expect("Failed to setup KZGSettings");
         backend
-            .save_to_file(Some(SECRETS_PATH), Some(PRECOMPUTE_PATH))
+            .save_to_file(Some(SETUP_PATH), Some(PRECOMPUTE_PATH))
             .expect("Failed to save to file");
 
         let cfg = SetupConfig {
-            secrets_path: SECRETS_PATH.to_owned(),
+            setup_path: SETUP_PATH.to_owned(),
             precompute_path: PRECOMPUTE_PATH.to_owned(),
             scale: SCALE,
             overwrite: false,
@@ -366,7 +366,7 @@ mod tests {
     fn test_pipeline() {
         use crate::{RunArgs, SetupArgs};
         // Setup defaults
-        const SECRETS_PATH: &str = "test_setup";
+        const SETUP_PATH: &str = "test_setup";
         const PRECOMPUTE_PATH: &str = "test_precompute";
         const SCALE: usize = 5;
 
@@ -376,7 +376,7 @@ mod tests {
 
         // Do setup to populate files
         let setup_args = SetupArgs {
-            secrets_path: SECRETS_PATH.to_string(),
+            setup_path: SETUP_PATH.to_string(),
             precompute_path: PRECOMPUTE_PATH.to_string(),
             scale: SCALE,
             overwrite: false,
@@ -386,7 +386,7 @@ mod tests {
 
         let backend = BlstBackend::setup(setup_args.into()).expect("Failed to setup KZGSettings");
         backend
-            .save_to_file(Some(SECRETS_PATH), Some(PRECOMPUTE_PATH))
+            .save_to_file(Some(SETUP_PATH), Some(PRECOMPUTE_PATH))
             .expect("Failed to save to file");
 
         // Files are now populated, restart with files
@@ -394,7 +394,7 @@ mod tests {
             host: HOST.to_owned(),
             port: PORT,
             scale: SCALE,
-            secrets_path: Some(SECRETS_PATH.to_owned()),
+            setup_path: Some(SETUP_PATH.to_owned()),
             precompute_path: Some(PRECOMPUTE_PATH.to_owned()),
         };
 
@@ -442,7 +442,7 @@ mod tests {
             .expect("Failed to verify proof");
         assert!(result);
 
-        std::fs::remove_file(SECRETS_PATH).unwrap();
+        std::fs::remove_file(SETUP_PATH).unwrap();
         std::fs::remove_file(PRECOMPUTE_PATH).unwrap();
     }
 }
