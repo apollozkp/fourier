@@ -358,6 +358,7 @@ mod tests {
         };
         let backend = BlstBackend::setup(cfg).expect("Failed to setup KZGSettings");
         assert!(backend.kzg_settings.get_precomputation().is_some());
+        std::fs::remove_file(SETUP_PATH).unwrap();
         std::fs::remove_file(PRECOMPUTE_PATH).unwrap();
     }
 
