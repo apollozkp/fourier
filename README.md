@@ -1,3 +1,15 @@
+<div align="center">
+
+# **Apollo ZK library**
+[![Discord Chat](https://img.shields.io/discord/308323056592486420.svg)](https://discord.com/channels/799672011265015819/1222672871092912262)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![example workflow](https://github.com/apollozkp/fourier/actions/workflows/ci.yml/badge.svg)
+[![Coverage Status](https://coveralls.io/repos/github/apollozkp/fourier/badge.svg?branch=main)](https://coveralls.io/github/apollozkp/fourier?branch=main)
+
+[Website](https://apollozkp.com)
+
+</div>
+
 # To use
 
 1. Install from git
