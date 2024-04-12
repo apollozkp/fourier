@@ -172,7 +172,13 @@ class Client:
     def stop_rust(self) -> bool:
         return self.cli.stop()
 
-    def start(self) -> bool:
+    def start(
+        self,
+        default_bin=DEFAULT_BIN,
+        secrets_path=DEFAULT_SECRETS_PATH,
+        precompute_path=DEFAULT_PRECOMPUTE_PATH,
+        skip_precompute=DEFAULT_SKIP_PRECOMPUTE,
+    ) -> bool:
         if not self.start_rust():
             return False
         if not self.ping().ok:
