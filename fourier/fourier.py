@@ -162,10 +162,11 @@ class Client:
         port=DEFAULT_PORT,
         setup_path=DEFAULT_SETUP_PATH,
         precompute_path=DEFAULT_PRECOMPUTE_PATH,
+        bin=DEFAULT_BIN,
     ):
         self.host = host
         self.port = port
-        self.cli = CLI()
+        self.cli = CLI(bin=bin)
         self.setup_path = setup_path if os.path.exists(setup_path) else None
         self.precompute_path = (
             precompute_path if os.path.exists(precompute_path) else None
@@ -334,10 +335,15 @@ if __name__ == "__main__":
     PORT = 1337
     SETUP_PATH = "setup"
     PRECOMPUTE_PATH = "precompute"
+    BIN = "target/release/fourier"
     setup_path = SETUP_PATH if os.path.exists(SETUP_PATH) else None
 
     rpc = Client(
-        host=HOST, port=PORT, setup_path=SETUP_PATH, precompute_path=PRECOMPUTE_PATH
+        host=HOST,
+        port=PORT,
+        setup_path=SETUP_PATH,
+        precompute_path=PRECOMPUTE_PATH,
+        bin=BIN,
     )
     precompute_path = PRECOMPUTE_PATH if os.path.exists(PRECOMPUTE_PATH) else None
     rpc.start(scale=4)
