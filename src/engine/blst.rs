@@ -443,7 +443,7 @@ mod tests {
             .expect("Failed to verify proof");
         assert!(result);
 
-        std::fs::remove_file(SETUP_PATH).unwrap();
-        std::fs::remove_file(PRECOMPUTE_PATH).unwrap();
+        let _ = std::fs::remove_file(SETUP_PATH);
+        let _ = std::fs::remove_file(PRECOMPUTE_PATH);
     }
 }
