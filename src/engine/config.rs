@@ -59,7 +59,7 @@ pub struct SetupConfig {
 
     pub scale: usize,
     pub overwrite: bool,
-    pub generate_secrets: bool,
+    pub generate_setup: bool,
     pub generate_precompute: bool,
 }
 
@@ -70,7 +70,7 @@ impl From<SetupArgs> for SetupConfig {
             precompute_path: args.precompute_path,
             scale: args.scale,
             overwrite: args.overwrite,
-            generate_secrets: args.generate_secrets,
+            generate_setup: args.generate_setup,
             generate_precompute: args.generate_precompute,
         }
     }
@@ -82,7 +82,7 @@ impl From<BackendConfig> for SetupConfig {
         const DEFAULT_PRECOMPUTE_PATH: &str = "precompute";
         // If no path is provided, generate
         // Resort to default path if not provided
-        let generate_secrets = args.setup_path.is_none();
+        let generate_setup = args.setup_path.is_none();
         let setup_path = args
             .setup_path
             .unwrap_or(DEFAULT_SETUP_PATH.to_string());
@@ -95,7 +95,7 @@ impl From<BackendConfig> for SetupConfig {
             precompute_path,
             scale: args.scale,
             overwrite: false,
-            generate_secrets,
+            generate_setup,
             generate_precompute,
         }
     }
@@ -124,8 +124,8 @@ impl SetupConfig {
         self.overwrite
     }
 
-    pub fn generate_secrets(&self) -> bool {
-        self.generate_secrets
+    pub fn generate_setup(&self) -> bool {
+        self.generate_setup
     }
 
     pub fn generate_precompute(&self) -> bool {

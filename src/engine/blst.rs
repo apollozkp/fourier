@@ -34,19 +34,19 @@ pub struct BlstBackend {
 }
 
 impl BlstBackend {
-    fn load_secrets_from_file(path: &str) -> Result<(Vec<FsG1>, Vec<FsG2>), String> {
-        crate::utils::timed("reading secrets", || {
-            rust_kzg_blst::utils::load_secrets_from_file(path)
+    fn load_setup_from_file(path: &str) -> Result<(Vec<FsG1>, Vec<FsG2>), String> {
+        crate::utils::timed("reading setup", || {
+            rust_kzg_blst::utils::load_setup_from_file(path)
         })
     }
 
-    pub fn save_secrets_to_file(
+    pub fn save_setup_to_file(
         file_path: &str,
         secret_g1: &[FsG1],
         secret_g2: &[FsG2],
     ) -> Result<(), String> {
-        crate::utils::timed("writing secrets", || {
-            rust_kzg_blst::utils::save_secrets_to_file(file_path, secret_g1, secret_g2)
+        crate::utils::timed("writing setup", || {
+            rust_kzg_blst::utils::save_setup_to_file(file_path, secret_g1, secret_g2)
         })
     }
 
@@ -121,14 +121,14 @@ impl BlstBackend {
         precompute_path: Option<&str>,
     ) -> Result<(), String> {
         if let Some(path) = setup_path {
-            Self::save_secrets_to_file(
+            Self::save_setup_to_file(
                 path,
                 &self.kzg_settings.secret_g1,
                 &self.kzg_settings.secret_g2,
             )
             .map_err(|e| e.to_string())?;
         } else {
-            warn!("No secrets path provided, skipping secrets save");
+            warn!("No setup path provided, skipping setup save");
         }
 
         if let Some(path) = precompute_path {
@@ -164,14 +164,14 @@ impl crate::engine::backend::Backend for BlstBackend {
             Self::new_fft_settings(cfg.scale())
         })?;
 
-        let (s1, s2) = if cfg.generate_secrets() {
+        let (s1, s2) = if cfg.generate_setup() {
             timed("Generating trusted setup", || {
                 let secret: [u8; 32] = rand::thread_rng().gen();
                 Self::generate_trusted_setup(fft_settings.get_max_width(), secret)
             })
         } else {
-            timed("Reading secrets from file", || {
-                Self::load_secrets_from_file(cfg.setup_path())
+            timed("Reading setup from file", || {
+                Self::load_setup_from_file(cfg.setup_path())
                     .expect("Failed to read setup from file")
             })
         };
@@ -340,7 +340,7 @@ mod tests {
             precompute_path: PRECOMPUTE_PATH.to_owned(),
             scale: SCALE,
             overwrite: false,
-            generate_secrets: true,
+            generate_setup: true,
             generate_precompute: true,
         };
         let backend = BlstBackend::setup(cfg).expect("Failed to setup KZGSettings");
@@ -353,7 +353,7 @@ mod tests {
             precompute_path: PRECOMPUTE_PATH.to_owned(),
             scale: SCALE,
             overwrite: false,
-            generate_secrets: false,
+            generate_setup: false,
             generate_precompute: false,
         };
         let backend = BlstBackend::setup(cfg).expect("Failed to setup KZGSettings");
@@ -381,7 +381,7 @@ mod tests {
             precompute_path: PRECOMPUTE_PATH.to_string(),
             scale: SCALE,
             overwrite: false,
-            generate_secrets: true,
+            generate_setup: true,
             generate_precompute: true,
         };
 
