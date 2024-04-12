@@ -1,3 +1,4 @@
+use crate::engine::config::{BackendConfig, SetupConfig};
 use kzg::{FFTSettings, Fr, G1Affine, G1Fp, G1GetFp, G1Mul, KZGSettings, Poly, G1, G2};
 
 pub trait Backend {
@@ -39,65 +40,8 @@ pub trait Backend {
     fn random_poly(&self, degree: usize) -> Self::Poly;
     fn random_point(&self) -> Self::Fr;
     fn evaluate(&self, poly: &Self::Poly, x: Self::Fr) -> Self::Fr;
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct BackendCacheConfig {
-    pub secrets_path: Option<String>,
-    pub precompute_path: Option<String>,
-}
-
-impl BackendCacheConfig {
-    pub fn new(secrets_path: Option<String>, precompute_path: Option<String>) -> Self {
-        Self {
-            secrets_path,
-            precompute_path,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct BackendConfig {
-    pub scale: Option<usize>,
-    pub skip_precompute: Option<bool>,
-    pub skip_secrets: Option<bool>,
-    pub cache: Option<BackendCacheConfig>,
-}
-
-impl BackendConfig {
-    pub fn new(
-        scale: Option<usize>,
-        cache: Option<BackendCacheConfig>,
-        skip_precompute: Option<bool>,
-        skip_secrets: Option<bool>,
-    ) -> Self {
-        Self {
-            scale,
-            skip_precompute,
-            skip_secrets,
-            cache,
-        }
-    }
-
-    pub fn secrets_path(&self) -> Option<&str> {
-        self.cache.as_ref().and_then(|c| c.secrets_path.as_deref())
-    }
-
-    pub fn precompute_path(&self) -> Option<&str> {
-        self.cache
-            .as_ref()
-            .and_then(|c| c.precompute_path.as_deref())
-    }
-
-    pub fn scale(&self) -> Option<usize> {
-        self.scale
-    }
-
-    pub fn skip_precompute(&self) -> Option<bool> {
-        self.skip_precompute
-    }
-
-    pub fn skip_secrets(&self) -> Option<bool> {
-        self.skip_secrets
-    }
+    fn setup(cfg: SetupConfig) -> Result<Self, String>
+    where
+        Self: Sized;
+    fn setup_and_save(cfg: SetupConfig) -> Result<(), String>;
 }

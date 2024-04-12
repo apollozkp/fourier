@@ -9,6 +9,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tracing::{error, info};
 
+use crate::RunArgs;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct JsonRpcRequest {
     jsonrpc: String,
@@ -470,35 +472,16 @@ where
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub host: String,
-    pub port: u16,
-    pub backend: crate::engine::backend::BackendConfig,
+    pub port: usize,
+    pub backend: crate::engine::config::BackendConfig,
 }
 
-impl Config {
-    const DEFAULT_PORT: u16 = 1337;
-    const DEFAULT_HOST: &'static str = "localhost";
-    pub fn new(
-        port: Option<u16>,
-        host: Option<String>,
-        secrets_path: Option<String>,
-        precompute_path: Option<String>,
-        scale: Option<usize>,
-        skip_precompute: Option<bool>,
-    ) -> Self {
-        let cache_config = crate::engine::backend::BackendCacheConfig::new(
-            secrets_path.clone(),
-            precompute_path.clone(),
-        );
-        let backend = crate::engine::backend::BackendConfig::new(
-            scale,
-            Some(cache_config),
-            skip_precompute,
-            None,
-        );
+impl From<RunArgs> for Config {
+    fn from(args: RunArgs) -> Self {
         Config {
-            host: host.unwrap_or(Self::DEFAULT_HOST.to_owned()),
-            port: port.unwrap_or(Self::DEFAULT_PORT),
-            backend,
+            host: args.host.clone(),
+            port: args.port,
+            backend: args.into(),
         }
     }
 }

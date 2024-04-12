@@ -1,24 +1,39 @@
-use kzg::{FFTSettings, Fr, KZGSettings, Poly, G1, G2};
+use crate::utils::timed;
+use kzg::{FFTSettings, Fr, KZGSettings, Poly, G1};
 use rand::Rng;
-use rayon::prelude::*;
 use rust_kzg_blst::types::fp::FsFp;
 use rust_kzg_blst::types::fr::FsFr;
 use rust_kzg_blst::types::g1::FsG1Affine;
 use rust_kzg_blst::types::{g1::FsG1, g2::FsG2};
 use rust_kzg_blst::utils::generate_trusted_setup;
-// use rust_kzg_blst::kzg_types::{FsG1, FsG2};
-use crate::utils::timed;
-use std::io::Read;
 use std::sync::Arc;
-use tracing::{debug, warn};
+use tracing::warn;
+
+use crate::engine::config::{BackendConfig, SetupConfig};
+
+pub enum PrecomputeInstruction {
+    Skip,
+    Generate,
+    Loaded(Option<kzg::msm::precompute::PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>>),
+}
+
+impl From<SetupConfig> for PrecomputeInstruction {
+    fn from(cfg: SetupConfig) -> Self {
+        if cfg.generate_precompute() {
+            PrecomputeInstruction::Generate
+        } else {
+            let precompute = BlstBackend::load_precompute_from_file(cfg.precompute_path())
+                .expect("Failed to load precompute from file");
+            PrecomputeInstruction::Loaded(precompute)
+        }
+    }
+}
 
 pub struct BlstBackend {
-    pub fft_settings: rust_kzg_blst::types::fft_settings::FsFFTSettings,
     pub kzg_settings: rust_kzg_blst::types::kzg_settings::FsKZGSettings,
 }
 
 impl BlstBackend {
-    const DEFAULT_SCALE: usize = 20;
     fn load_secrets_from_file(path: &str) -> Result<(Vec<FsG1>, Vec<FsG2>), String> {
         crate::utils::timed("reading secrets", || {
             rust_kzg_blst::utils::load_secrets_from_file(path)
@@ -72,22 +87,24 @@ impl BlstBackend {
         s2: &[FsG2],
         max_width: usize,
         fft_settings: &rust_kzg_blst::types::fft_settings::FsFFTSettings,
-        precomputation: Precompute,
+        precomputation: PrecomputeInstruction,
     ) -> Result<rust_kzg_blst::types::kzg_settings::FsKZGSettings, String> {
         match precomputation {
-            Precompute::Skip => Ok(rust_kzg_blst::types::kzg_settings::FsKZGSettings {
+            PrecomputeInstruction::Skip => Ok(rust_kzg_blst::types::kzg_settings::FsKZGSettings {
                 fs: fft_settings.clone(),
                 secret_g1: s1.to_vec(),
                 secret_g2: s2.to_vec(),
                 precomputation: None,
             }),
-            Precompute::Generate => rust_kzg_blst::types::kzg_settings::FsKZGSettings::new(
-                s1,
-                s2,
-                max_width,
-                fft_settings,
-            ),
-            Precompute::Loaded(precomputation) => {
+            PrecomputeInstruction::Generate => {
+                rust_kzg_blst::types::kzg_settings::FsKZGSettings::new(
+                    s1,
+                    s2,
+                    max_width,
+                    fft_settings,
+                )
+            }
+            PrecomputeInstruction::Loaded(precomputation) => {
                 Ok(rust_kzg_blst::types::kzg_settings::FsKZGSettings {
                     fs: fft_settings.clone(),
                     secret_g1: s1.to_vec(),
@@ -100,20 +117,23 @@ impl BlstBackend {
 
     pub fn save_to_file(
         &self,
-        secrets_path: Option<String>,
-        precompute_path: Option<String>,
+        secrets_path: Option<&str>,
+        precompute_path: Option<&str>,
     ) -> Result<(), String> {
-        const DEFAULT_SECRETS_PATH: &str = "setup";
-        Self::save_secrets_to_file(
-            &secrets_path.unwrap_or(DEFAULT_SECRETS_PATH.to_owned()),
-            &self.kzg_settings.secret_g1,
-            &self.kzg_settings.secret_g2,
-        )
-        .map_err(|e| e.to_string())?;
+        if let Some(path) = secrets_path {
+            Self::save_secrets_to_file(
+                path,
+                &self.kzg_settings.secret_g1,
+                &self.kzg_settings.secret_g2,
+            )
+            .map_err(|e| e.to_string())?;
+        } else {
+            warn!("No secrets path provided, skipping secrets save");
+        }
 
-        if let Some(path) = precompute_path.clone() {
+        if let Some(path) = precompute_path {
             if let Some(precompute) = self.kzg_settings.get_precomputation() {
-                Self::save_precompute_to_file(precompute, &path).map_err(|e| e.to_string())?;
+                Self::save_precompute_to_file(precompute, path).map_err(|e| e.to_string())?;
             } else {
                 warn!("No precompute to save, skipping");
             }
@@ -122,12 +142,6 @@ impl BlstBackend {
         };
         Ok(())
     }
-}
-
-pub enum Precompute {
-    Skip,
-    Generate,
-    Loaded(Option<kzg::msm::precompute::PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>>),
 }
 
 impl crate::engine::backend::Backend for BlstBackend {
@@ -140,46 +154,26 @@ impl crate::engine::backend::Backend for BlstBackend {
     type G1Fp = rust_kzg_blst::types::fp::FsFp;
     type G1Affine = rust_kzg_blst::types::g1::FsG1Affine;
 
-    fn new(cfg: Option<crate::engine::backend::BackendConfig>) -> Self {
-        debug!("cfg: {:?}", cfg);
-        let scale = cfg
-            .as_ref()
-            .and_then(|cfg| cfg.scale)
-            .unwrap_or(Self::DEFAULT_SCALE);
-        let fft_settings = timed("Creating FFTSettings", || Self::new_fft_settings(scale))
-            .expect("Failed to create FFTSettings");
+    fn new(cfg: Option<BackendConfig>) -> Self {
+        let cfg = cfg.unwrap_or_default().into();
+        Self::setup(cfg).expect("Failed to setup KZGSettings")
+    }
 
-        let (s1, s2, precompute) = if let Some(cfg) = cfg {
-            let (s1, s2) = if let Some(path) = cfg.secrets_path() {
-                timed("Reading secrets from file", || {
-                    Self::load_secrets_from_file(path).expect("Failed to read setup from file")
-                })
-            } else {
-                warn!("No setup file provided, generating new setup");
-                timed("Generating trusted setup", || {
-                    let secret: [u8; 32] = rand::thread_rng().gen();
-                    Self::generate_trusted_setup(fft_settings.get_max_width(), secret)
-                })
-            };
+    fn setup(cfg: SetupConfig) -> Result<Self, String> {
+        let fft_settings = timed("Creating FFTSettings", || {
+            Self::new_fft_settings(cfg.scale())
+        })?;
 
-            let precompute = if let Some(path) = cfg.precompute_path() {
-                timed("Loading precompute from file", || {
-                    Precompute::Loaded(
-                        Self::load_precompute_from_file(path)
-                            .expect("Failed to load precompute from file"),
-                    )
-                })
-            } else if let Some(true) = cfg.skip_precompute() {
-                Precompute::Skip
-            } else {
-                Precompute::Generate
-            };
-            (s1, s2, precompute)
+        let (s1, s2) = if cfg.generate_secrets() {
+            timed("Generating trusted setup", || {
+                let secret: [u8; 32] = rand::thread_rng().gen();
+                Self::generate_trusted_setup(fft_settings.get_max_width(), secret)
+            })
         } else {
-            warn!("No config provided, using default settings");
-            let secret: [u8; 32] = rand::thread_rng().gen();
-            let (s1, s2) = Self::generate_trusted_setup(fft_settings.get_max_width(), secret);
-            (s1, s2, Precompute::Generate)
+            timed("Reading secrets from file", || {
+                Self::load_secrets_from_file(cfg.secrets_path())
+                    .expect("Failed to read setup from file")
+            })
         };
 
         let kzg_settings = timed("Creating KZGSettings", || {
@@ -188,15 +182,11 @@ impl crate::engine::backend::Backend for BlstBackend {
                 &s2,
                 fft_settings.get_max_width(),
                 &fft_settings,
-                precompute,
+                cfg.into(),
             )
-            .expect("Failed to create KZGSettings")
-        });
+        })?;
 
-        Self {
-            fft_settings,
-            kzg_settings,
-        }
+        Ok(Self { kzg_settings })
     }
 
     fn commit_to_poly(&self, poly: Self::Poly) -> Result<Self::G1, String> {
@@ -249,6 +239,11 @@ impl crate::engine::backend::Backend for BlstBackend {
     fn evaluate(&self, poly: &Self::Poly, x: Self::Fr) -> Self::Fr {
         poly.eval(&x)
     }
+
+    fn setup_and_save(cfg: SetupConfig) -> Result<(), String> {
+        let backend = Self::setup(cfg.clone())?;
+        backend.save_to_file(Some(cfg.secrets_path()), Some(cfg.precompute_path()))
+    }
 }
 
 #[cfg(test)]
@@ -261,6 +256,7 @@ mod tests {
     use rust_kzg_blst::types::fr::FsFr;
     use rust_kzg_blst::types::g1::FsG1;
     use rust_kzg_blst::types::poly::FsPoly;
+    use tracing::debug;
 
     const TEST_POLY: [&str; 16] = [
         "6945DC5C4FF4DAC8A7278C9B8F0D4613320CF87FF947F21AC9BF42327EC19448",
@@ -286,8 +282,8 @@ mod tests {
 
     impl BlstBackend {
         pub fn random_poly(&self) -> FsPoly {
-            let mut poly = FsPoly::new(self.fft_settings.get_max_width());
-            for i in 0..self.fft_settings.get_max_width() {
+            let mut poly = FsPoly::new(self.kzg_settings.fs.get_max_width());
+            for i in 0..self.kzg_settings.fs.get_max_width() {
                 poly.set_coeff_at(i, &Fr::rand());
             }
             poly
@@ -304,8 +300,9 @@ mod tests {
 
     #[test]
     #[tracing_test::traced_test]
-    fn test_arkworks_backend() {
-        let cfg = crate::engine::backend::BackendConfig::new(Some(4), None, None, None);
+    fn test_blst_backend() {
+        const SCALE: usize = 4;
+        let cfg = BackendConfig::new(None, None, SCALE, false);
         let backend = BlstBackend::new(Some(cfg.clone()));
         let poly = backend.random_poly();
         debug!("poly: {:?}", poly.clone());
@@ -321,8 +318,9 @@ mod tests {
 
     #[test]
     #[tracing_test::traced_test]
-    fn test_arkworks_g1_serialize_deserialize() {
-        let cfg = crate::engine::backend::BackendConfig::new(Some(4), None, None, None);
+    fn test_blst_g1_serialize_deserialize() {
+        const SCALE: usize = 4;
+        let cfg = BackendConfig::new(None, None, SCALE, false);
         let backend = BlstBackend::new(Some(cfg.clone()));
         let g1 = backend.random_g1();
         debug!("g1: {:?}", g1);
@@ -334,49 +332,73 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_write_and_load_precompute() {
-        let cfg = crate::engine::backend::BackendConfig::new(Some(4), None, Some(true), None);
-        let backend = BlstBackend::new(Some(cfg.clone()));
+        const SECRETS_PATH: &str = "test_setup";
+        const PRECOMPUTE_PATH: &str = "test_precompute";
+        const SCALE: usize = 4;
+        let cfg = SetupConfig {
+            secrets_path: SECRETS_PATH.to_owned(),
+            precompute_path: PRECOMPUTE_PATH.to_owned(),
+            scale: SCALE,
+            overwrite: false,
+            generate_secrets: true,
+            generate_precompute: true,
+        };
+        let backend = BlstBackend::setup(cfg).expect("Failed to setup KZGSettings");
+        backend
+            .save_to_file(Some(SECRETS_PATH), Some(PRECOMPUTE_PATH))
+            .expect("Failed to save to file");
 
-        let path = "test_precompute".to_owned();
-        if let Some(precomputation) = backend.kzg_settings.get_precomputation() {
-            BlstBackend::save_precompute_to_file(precomputation, &path)
-                .expect("Failed to save precompute to file");
-
-            let loaded = BlstBackend::load_precompute_from_file(&path)
-                .expect("Failed to load precompute from file");
-
-            debug!("precomputation: {:?}", precomputation);
-            debug!("loaded: {:?}", loaded);
-        }
-        // std::fs::remove_file(path).unwrap();
+        let cfg = SetupConfig {
+            secrets_path: SECRETS_PATH.to_owned(),
+            precompute_path: PRECOMPUTE_PATH.to_owned(),
+            scale: SCALE,
+            overwrite: false,
+            generate_secrets: false,
+            generate_precompute: false,
+        };
+        let backend = BlstBackend::setup(cfg).expect("Failed to setup KZGSettings");
+        assert!(backend.kzg_settings.get_precomputation().is_some());
+        std::fs::remove_file(PRECOMPUTE_PATH).unwrap();
     }
 
     #[test]
     #[tracing_test::traced_test]
     fn test_pipeline() {
-        use crate::{setup, BackendConfig, SetupArgs};
+        use crate::{RunArgs, SetupArgs};
+        // Setup defaults
+        const SECRETS_PATH: &str = "test_setup";
+        const PRECOMPUTE_PATH: &str = "test_precompute";
+        const SCALE: usize = 5;
 
-        let secrets_path = "test_setup".to_owned();
-        let precompute_path = "test_precompute".to_owned();
-        let args = SetupArgs {
-            secrets_path: Some(secrets_path.clone()),
-            precompute_path: Some(precompute_path.clone()),
-            scale: Some(5), // Jack this up to test with real sizes
-            overwrite: true,
-            skip_secrets: false,
+        // Run defaults
+        const HOST: &str = "localhost";
+        const PORT: usize = 9999;
+
+        // Do setup to populate files
+        let setup_args = SetupArgs {
+            secrets_path: SECRETS_PATH.to_string(),
+            precompute_path: PRECOMPUTE_PATH.to_string(),
+            scale: SCALE,
+            overwrite: false,
+            generate_secrets: true,
+            generate_precompute: true,
         };
 
-        setup(args);
+        let backend = BlstBackend::setup(setup_args.into()).expect("Failed to setup KZGSettings");
+        backend
+            .save_to_file(Some(SECRETS_PATH), Some(PRECOMPUTE_PATH))
+            .expect("Failed to save to file");
 
-        let backend = BlstBackend::new(Some(BackendConfig::new(
-            None,
-            Some(crate::engine::backend::BackendCacheConfig::new(
-                Some(secrets_path.clone()),
-                Some(precompute_path.clone()),
-            )),
-            Some(false),
-            Some(false),
-        )));
+        // Files are now populated, restart with files
+        let run_args = RunArgs {
+            host: HOST.to_owned(),
+            port: PORT,
+            scale: SCALE,
+            secrets_path: Some(SECRETS_PATH.to_owned()),
+            precompute_path: Some(PRECOMPUTE_PATH.to_owned()),
+        };
+
+        let backend = BlstBackend::new(Some(run_args.into()));
 
         // Get hardcoded poly
         let poly = backend
@@ -420,7 +442,7 @@ mod tests {
             .expect("Failed to verify proof");
         assert!(result);
 
-        std::fs::remove_file(secrets_path).unwrap();
-        std::fs::remove_file(precompute_path).unwrap();
+        std::fs::remove_file(SECRETS_PATH).unwrap();
+        std::fs::remove_file(PRECOMPUTE_PATH).unwrap();
     }
 }

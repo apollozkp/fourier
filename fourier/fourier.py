@@ -98,7 +98,6 @@ class CLI:
         SCALE_LONG = "--scale"
         SECRETS_PATH_LONG = "--secrets-path"
         PRECOMPUTE_PATH_LONG = "--precompute-path"
-        SKIP_PRECOMPUTE_LONG = "--skip-precompute"
         args = ["run"]
         if host:
             args.extend([HOST_LONG, host])
@@ -110,19 +109,19 @@ class CLI:
             args.extend([SECRETS_PATH_LONG, secrets_path])
         if precompute_path:
             args.extend([PRECOMPUTE_PATH_LONG, precompute_path])
-        if skip_precompute:
-            args.extend([SKIP_PRECOMPUTE_LONG])
         print(f"Running: {self.cmd(args)}")
         self.process = subprocess.Popen(args=self.cmd(args))
         return self.wait_until_running()
 
     def setup(
-        self, secrets_path=None, overwrite=False, scale=None, precompute_path=None
+        self, secrets_path=None, overwrite=False, scale=None, precompute_path=None, generate_secrets=False, generate_precompute=False
     ):
-        SCALE_LONG = "--scale"
         SECRETS_PATH_LONG = "--secrets-path"
         PRECOMPUTE_PATH_LONG = "--precompute-path"
+        SCALE_LONG = "--scale"
         OVERWRITE_LONG = "--overwrite"
+        GENERATE_SECRETS_LONG = "--generate-secrets"
+        GENERATE_PRECOMPUTE_LONG = "--generate-precompute"
         args = ["setup"]
         if secrets_path:
             args.extend([SECRETS_PATH_LONG, secrets_path])
@@ -132,6 +131,10 @@ class CLI:
             args.extend([OVERWRITE_LONG])
         if scale:
             args.extend([SCALE_LONG, str(scale)])
+        if generate_secrets:
+            args.extend([GENERATE_SECRETS_LONG])
+        if generate_precompute:
+            args.extend([GENERATE_PRECOMPUTE_LONG])
         self.process = subprocess.Popen(args=self.cmd(args))
         return self.wait_until_running()
 

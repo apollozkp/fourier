@@ -5,22 +5,16 @@ pub mod utils;
 use tracing::error;
 
 use crate::engine::backend::Backend as _;
-use crate::engine::{backend::BackendConfig, blst::BlstBackend as Backend};
+use crate::engine::blst::BlstBackend as Backend;
 
 use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[clap(name = "fourier-rpc", version = "0.1.0", about = "Fourier RPC server", long_about = None)]
 struct CLi {
-    #[clap(flatten)]
-    global_opts: GlobalOpts,
-
     #[clap(subcommand)]
     subcmd: SubCommand,
 }
-
-#[derive(Parser, Debug)]
-pub struct GlobalOpts {}
 
 #[derive(Parser, Debug)]
 enum SubCommand {
@@ -29,88 +23,87 @@ enum SubCommand {
 }
 
 #[derive(Parser, Debug)]
-struct SetupArgs {
+struct RunArgs {
+    // Path to the file where the setup is saved, omit to generate a new setup
     #[clap(long)]
     secrets_path: Option<String>,
+
+    // Path to the file where the precomputed values are saved, omit to generate a new setup
     #[clap(long)]
     precompute_path: Option<String>,
-    #[clap(long)]
-    scale: Option<usize>,
-    #[clap(long)]
-    overwrite: bool,
-    #[clap(long)]
-    skip_secrets: bool,
-}
 
-impl SetupArgs {
-    fn to_config(&self) -> BackendConfig {
-        let cache_config = crate::engine::backend::BackendCacheConfig::new(
-            if self.skip_secrets {self.secrets_path.clone()} else {None},
-            None,
-        );
-        BackendConfig::new(
-            self.scale,
-            Some(cache_config),
-            None,
-            Some(self.skip_secrets),
-        )
-    }
+    // The scale of the polynomial
+    #[clap(long, default_value_t = 20)]
+    scale: usize,
+
+    // The host to bind to
+    #[clap(long, default_value = "localhost")]
+    host: String,
+
+    // The port to bind to
+    #[clap(long, default_value = "1337")]
+    port: usize,
 }
 
 #[derive(Parser, Debug)]
-struct RunArgs {
-    #[clap(long)]
-    host: Option<String>,
-    #[clap(long)]
-    port: Option<u16>,
-    #[clap(long)]
-    scale: Option<usize>,
-    #[clap(long)]
-    secrets_path: Option<String>,
-    #[clap(long)]
-    precompute_path: Option<String>,
-    #[clap(long)]
-    skip_precompute: bool,
+struct SetupArgs {
+    // Path to the file where the setup is saved
+    #[clap(long, default_value = "setup")]
+    secrets_path: String,
+
+    // Path to the file where the precomputed values are saved
+    #[clap(long, default_value = "precompute")]
+    precompute_path: String,
+
+    // The scale of the polynomial
+    #[clap(long, default_value_t = 20)]
+    scale: usize,
+
+    // Overwrite the files if they already exist
+    #[clap(long, default_value_t = false)]
+    overwrite: bool,
+
+    // Generate the secrets on setup, false will attempt to load them from the file
+    #[clap(long, default_value_t = false)]
+    generate_secrets: bool,
+
+    // Generate the precomputed values on setup, false will attempt to load them from the file
+    #[clap(long, default_value_t = false)]
+    generate_precompute: bool,
 }
 
-impl RunArgs {
-    fn to_config(&self) -> rpc::Config {
-        rpc::Config::new(
-            self.port,
-            self.host.clone(),
-            self.secrets_path.clone(),
-            self.precompute_path.clone(),
-            self.scale,
-            Some(self.skip_precompute),
-        )
+impl SetupArgs {
+    fn can_proceed(&self) -> bool {
+        fn path_exists(path: &str) -> bool {
+            std::path::Path::new(path).exists()
+        }
+        if path_exists(&self.secrets_path) && !self.overwrite {
+            error!(
+                "File {} already exists, use --overwrite to overwrite",
+                self.secrets_path
+            );
+            return false;
+        }
+        if path_exists(&self.precompute_path) && !self.overwrite {
+            error!(
+                "File {} already exists, use --overwrite to overwrite",
+                self.precompute_path
+            );
+            return false;
+        }
+        true
     }
 }
 
 pub(crate) fn setup(args: SetupArgs) {
-    fn path_exists(path: Option<String>) -> bool {
-        path.map(|p| std::path::Path::new(&p).exists())
-            .unwrap_or(false)
-    }
-    if path_exists(args.secrets_path.clone()) && !args.overwrite {
-        error!("File {} already exists, use --overwrite to overwrite", args.secrets_path.unwrap());
-        return;
-    }
-    if path_exists(args.precompute_path.clone()) && !args.overwrite {
-        error!("File {} already exists, use --overwrite to overwrite", args.precompute_path.unwrap());
-        return;
-    }
-
-    let backend = utils::timed("setup", || {
-        Backend::new(Some(args.to_config().clone()))
-    });
-
-    if let Err(e) = backend.save_to_file(args.secrets_path, args.precompute_path) {
-        error!("Failed to save to file: {}", e);
-    }
+    assert!(args.can_proceed());
+    Backend::setup_and_save(args.into())
+        .map_err(|e| error!("{}", e))
+        .unwrap();
 }
 
 async fn run_server(args: RunArgs) {
-    rpc::start_rpc_server::<Backend>(args.to_config()).await;
+    rpc::start_rpc_server::<Backend>(args.into()).await;
 }
 
 #[tokio::main]
