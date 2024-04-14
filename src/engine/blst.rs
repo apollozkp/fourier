@@ -183,7 +183,7 @@ impl crate::engine::backend::Backend for BlstBackend {
         } else {
             timed("Reading setup from file", || {
                 debug!("Reading secrets from file {}", cfg.setup_path());
-                Self::load_secrets_from_file(cfg.setup_path(), cfg.compressed())
+                Self::load_setup_from_file(cfg.setup_path(), cfg.compressed())
                     .expect("Failed to read setup from file")
             })
         };
@@ -384,7 +384,7 @@ mod tests {
                 precompute_path: PRECOMPUTE_PATH.to_owned(),
                 scale: SCALE,
                 overwrite: true,
-                generate_secrets: true,
+                generate_setup: true,
                 generate_precompute: true,
                 uncompressed: *uncompressed,
                 decompress_existing: false,
@@ -511,7 +511,7 @@ mod tests {
             precompute_path: PRECOMPUTE_PATH.to_string(),
             scale: SCALE,
             overwrite: false,
-            generate_secrets: true,
+            generate_setup: true,
             generate_precompute: true,
             uncompressed: UNCOMPRESSED,
             decompress_existing: false,
@@ -529,7 +529,7 @@ mod tests {
             precompute_path: PRECOMPUTE_PATH.to_string(),
             scale: SCALE,
             overwrite: false,
-            generate_secrets: false,
+            generate_setup: false,
             generate_precompute: false,
             uncompressed: UNCOMPRESSED,
             decompress_existing: true,
@@ -580,7 +580,7 @@ mod tests {
             precompute_path: PRECOMPUTE_PATH.to_string(),
             scale: SCALE,
             overwrite: false,
-            generate_secrets: true,
+            generate_setup: true,
             generate_precompute: true,
             uncompressed: UNCOMPRESSED,
             decompress_existing: false,
@@ -598,7 +598,7 @@ mod tests {
             precompute_path: PRECOMPUTE_PATH.to_string(),
             scale: SCALE,
             overwrite: false,
-            generate_secrets: false,
+            generate_setup: false,
             generate_precompute: false,
             uncompressed: UNCOMPRESSED,
             decompress_existing: false,

@@ -92,7 +92,7 @@ impl SetupArgs {
         fn path_exists(path: &str) -> bool {
             std::path::Path::new(path).exists()
         }
-        if path_exists(&self.setup_path) && self.generate_secrets && !self.overwrite {
+        if path_exists(&self.setup_path) && self.generate_setup&& !self.overwrite {
             error!(
                 "File {} already exists, use --overwrite to overwrite",
                 self.setup_path
