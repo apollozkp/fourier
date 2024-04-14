@@ -39,6 +39,7 @@ impl BlstBackend {
         path: &str,
         compressed: bool,
     ) -> Result<(Vec<FsG1>, Vec<FsG2>), String> {
+        debug!("Reading secrets from file {}", path);
         crate::utils::timed("reading secrets", || {
             rust_kzg_blst::utils::load_secrets_from_file(path, compressed)
         })
