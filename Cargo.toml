@@ -7,11 +7,11 @@ edition = "2021"
 
 [dependencies]
 # kzg
-kzg = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel"], branch = "precompute_to_file"}
-rust-kzg-blst = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel", "bgmw"], branch = "precompute_to_file"}
+# kzg = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel"], branch = "precompute_to_file"}
+# rust-kzg-blst = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel", "bgmw"], branch = "precompute_to_file"}
 
-# kzg = { path = "../rust-kzg/kzg", features = ["parallel"]}
-# rust-kzg-blst = { path = "../rust-kzg/blst", features = ["parallel", "bgmw"]}
+kzg = { path = "../rust-kzg/kzg", features = ["parallel"]}
+rust-kzg-blst = { path = "../rust-kzg/blst", features = ["parallel", "bgmw"]}
 # rpc
 tokio = { version = "1.37", features = ["macros", "full"] }
 tracing = "0.1.40"

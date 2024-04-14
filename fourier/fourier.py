@@ -94,12 +94,14 @@ class CLI:
         scale=None,
         setup_path=None,
         precompute_path=None,
+        compressed=True,
     ) -> bool:
         HOST_LONG = "--host"
         PORT_LONG = "--port"
         SCALE_LONG = "--scale"
         SETUP_PATH_LONG = "--setup-path"
         PRECOMPUTE_PATH_LONG = "--precompute-path"
+        COMPRESSED_LONG = "--compressed"
         args = ["run"]
         if host:
             args.extend([HOST_LONG, host])
@@ -111,6 +113,8 @@ class CLI:
             args.extend([SETUP_PATH_LONG, setup_path])
         if precompute_path:
             args.extend([PRECOMPUTE_PATH_LONG, precompute_path])
+        if compressed:
+            args.extend([COMPRESSED_LONG])
         print(f"Running: {self.cmd(args)}")
         self.process = subprocess.Popen(args=self.cmd(args))
         return self.wait_until_running()
@@ -123,6 +127,9 @@ class CLI:
         precompute_path=None,
         generate_secrets=False,
         generate_precompute=False,
+        compressed=True,
+        compress_existing=False,
+        decompress_existing=False,
     ):
         SETUP_PATH_LONG = "--setup-path"
         PRECOMPUTE_PATH_LONG = "--precompute-path"
@@ -130,6 +137,9 @@ class CLI:
         OVERWRITE_LONG = "--overwrite"
         GENERATE_SECRETS_LONG = "--generate-secrets"
         GENERATE_PRECOMPUTE_LONG = "--generate-precompute"
+        COMPRESSED_LONG = "--compressed"
+        COMPRESS_EXISTING_LONG = "--compress-existing"
+        DECOMPRESS_EXISTING_LONG = "--decompress-existing"
         args = ["setup"]
         if setup_path:
             args.extend([SETUP_PATH_LONG, setup_path])
@@ -143,6 +153,12 @@ class CLI:
             args.extend([GENERATE_SECRETS_LONG])
         if generate_precompute:
             args.extend([GENERATE_PRECOMPUTE_LONG])
+        if compressed:
+            args.extend([COMPRESSED_LONG])
+        if compress_existing:
+            args.extend([COMPRESS_EXISTING_LONG])
+        if decompress_existing:
+            args.extend([DECOMPRESS_EXISTING_LONG])
         self.process = subprocess.Popen(args=self.cmd(args))
         return self.wait_until_running()
 
@@ -334,7 +350,7 @@ if __name__ == "__main__":
     HOST = "localhost"
     PORT = 1337
     SETUP_PATH = "setup"
-    PRECOMPUTE_PATH = "precompute"
+    PRECOMPUTE_PATH = "precompute_uncompressed"
     BIN = "target/release/fourier"
     setup_path = SETUP_PATH if os.path.exists(SETUP_PATH) else None
 

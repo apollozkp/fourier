@@ -43,6 +43,10 @@ struct RunArgs {
     // The port to bind to
     #[clap(long, default_value = "1337")]
     port: usize,
+
+    // Compression on off
+    #[clap(long, default_value_t = false)]
+    uncompressed: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -70,6 +74,17 @@ struct SetupArgs {
     // Generate the precomputed values on setup, false will attempt to load them from the file
     #[clap(long, default_value_t = false)]
     generate_precompute: bool,
+
+    #[clap(long, default_value_t = false)]
+    uncompressed: bool,
+
+    // Compressed to uncompressed
+    #[clap(long, default_value_t = false)]
+    decompress_existing: bool,
+
+    // uncompressed to compressed
+    #[clap(long, default_value_t = false)]
+    compress_existing: bool,
 }
 
 impl SetupArgs {
@@ -77,18 +92,30 @@ impl SetupArgs {
         fn path_exists(path: &str) -> bool {
             std::path::Path::new(path).exists()
         }
-        if path_exists(&self.setup_path) && !self.overwrite {
+        if path_exists(&self.setup_path) && self.generate_secrets && !self.overwrite {
             error!(
                 "File {} already exists, use --overwrite to overwrite",
                 self.setup_path
             );
             return false;
         }
-        if path_exists(&self.precompute_path) && !self.overwrite {
+        if path_exists(&self.precompute_path) && self.generate_precompute && !self.overwrite {
             error!(
                 "File {} already exists, use --overwrite to overwrite",
                 self.precompute_path
             );
+            return false;
+        }
+        if self.compress_existing && self.decompress_existing {
+            error!("Cannot compress and decompress at the same time, choose one");
+            return false;
+        }
+        if self.compress_existing && !self.uncompressed {
+            error!("Cannot compress an already compressed file");
+            return false;
+        }
+        if self.decompress_existing && self.uncompressed {
+            error!("Cannot decompress an already decompressed file");
             return false;
         }
         true

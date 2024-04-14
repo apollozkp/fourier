@@ -7,6 +7,8 @@ pub struct BackendConfig {
 
     pub scale: usize,
     pub skip_precompute: bool,
+
+    pub compressed: bool,
 }
 
 impl From<RunArgs> for BackendConfig {
@@ -16,6 +18,7 @@ impl From<RunArgs> for BackendConfig {
             precompute_path: args.precompute_path,
             scale: args.scale,
             skip_precompute: false,
+            compressed: !args.uncompressed,
         }
     }
 }
@@ -25,13 +28,15 @@ impl BackendConfig {
         setup_path: Option<String>,
         precompute_path: Option<String>,
         scale: usize,
-        skip_precompute: bool,
+        skip_precompute: Option<bool>,
+        compressed: Option<bool>,
     ) -> Self {
         Self {
             setup_path,
             precompute_path,
             scale,
-            skip_precompute,
+            skip_precompute: skip_precompute.unwrap_or(false),
+            compressed: compressed.unwrap_or(true),
         }
     }
 
@@ -61,6 +66,11 @@ pub struct SetupConfig {
     pub overwrite: bool,
     pub generate_secrets: bool,
     pub generate_precompute: bool,
+
+    // Compression args
+    pub compressed: bool,
+    pub decompress_existing: bool,
+    pub compress_existing: bool,
 }
 
 impl From<SetupArgs> for SetupConfig {
@@ -68,10 +78,15 @@ impl From<SetupArgs> for SetupConfig {
         Self {
             setup_path: args.setup_path,
             precompute_path: args.precompute_path,
+
             scale: args.scale,
             overwrite: args.overwrite,
             generate_secrets: args.generate_secrets,
             generate_precompute: args.generate_precompute,
+            
+            compressed: args.uncompressed,
+            decompress_existing: args.decompress_existing,
+            compress_existing: args.compress_existing,
         }
     }
 }
@@ -97,6 +112,9 @@ impl From<BackendConfig> for SetupConfig {
             overwrite: false,
             generate_secrets,
             generate_precompute,
+            compressed: !args.compressed,
+            decompress_existing: false,
+            compress_existing: false,
         }
     }
 }
@@ -130,5 +148,17 @@ impl SetupConfig {
 
     pub fn generate_precompute(&self) -> bool {
         self.generate_precompute
+    }
+
+    pub fn compressed(&self) -> bool {
+        self.compressed
+    }
+
+    pub fn decompress_existing(&self) -> bool {
+        self.decompress_existing
+    }
+
+    pub fn compress_existing(&self) -> bool {
+        self.compress_existing
     }
 }
