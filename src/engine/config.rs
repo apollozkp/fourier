@@ -1,6 +1,6 @@
 use crate::{RunArgs, SetupArgs};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct BackendConfig {
     pub setup_path: Option<String>,
     pub precompute_path: Option<String>,
@@ -9,6 +9,18 @@ pub struct BackendConfig {
     pub skip_precompute: bool,
 
     pub compressed: bool,
+}
+
+impl Default for BackendConfig {
+    fn default() -> Self {
+        Self {
+            setup_path: None,
+            precompute_path: None,
+            scale: 20,
+            skip_precompute: false,
+            compressed: true,
+        }
+    }
 }
 
 impl From<RunArgs> for BackendConfig {
@@ -55,6 +67,10 @@ impl BackendConfig {
     pub fn skip_precompute(&self) -> bool {
         self.skip_precompute
     }
+
+    pub fn compressed(&self) -> bool {
+        self.compressed
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -84,7 +100,7 @@ impl From<SetupArgs> for SetupConfig {
             generate_secrets: args.generate_secrets,
             generate_precompute: args.generate_precompute,
             
-            compressed: args.uncompressed,
+            compressed: !args.uncompressed,
             decompress_existing: args.decompress_existing,
             compress_existing: args.compress_existing,
         }
@@ -112,7 +128,7 @@ impl From<BackendConfig> for SetupConfig {
             overwrite: false,
             generate_secrets,
             generate_precompute,
-            compressed: !args.compressed,
+            compressed: args.compressed,
             decompress_existing: false,
             compress_existing: false,
         }

@@ -7,7 +7,7 @@ use rust_kzg_blst::types::g1::FsG1Affine;
 use rust_kzg_blst::types::{g1::FsG1, g2::FsG2};
 use rust_kzg_blst::utils::generate_trusted_setup;
 use std::sync::Arc;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::engine::config::{BackendConfig, SetupConfig};
 
@@ -181,6 +181,7 @@ impl crate::engine::backend::Backend for BlstBackend {
             })
         } else {
             timed("Reading secrets from file", || {
+                debug!("Reading secrets from file {}", cfg.setup_path());
                 Self::load_secrets_from_file(cfg.setup_path(), cfg.compressed())
                     .expect("Failed to read setup from file")
             })
@@ -253,24 +254,29 @@ impl crate::engine::backend::Backend for BlstBackend {
     fn setup_and_save(cfg: SetupConfig) -> Result<(), String> {
         let backend = Self::setup(cfg.clone())?;
         let (compressed, setup_path, precompute_path) = if cfg.compress_existing() {
+            debug!("Compressing setup and precompute");
             (
                 true,
                 format!("{}.compressed", cfg.setup_path()),
                 format!("{}.compressed", cfg.precompute_path()),
             )
         } else if cfg.decompress_existing() {
+            debug!("Decompressing setup and precompute");
             (
                 false,
                 format!("{}.decompressed", cfg.setup_path()),
                 format!("{}.decompressed", cfg.precompute_path()),
             )
         } else {
+            debug!("Saving setup and precompute");
             (
                 cfg.compressed(),
                 cfg.setup_path().to_string(),
                 cfg.precompute_path().to_string(),
             )
         };
+
+        debug!("Saving to setup: {}, precompute: {}", setup_path, precompute_path);
         backend.save_to_file(
             Some(setup_path.as_str()),
             Some(precompute_path.as_str()),
@@ -367,13 +373,14 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_write_and_load_precompute() {
-        const SETUP_PATH: &str = "test_setup";
-        const PRECOMPUTE_PATH: &str = "test_precompute";
-        for uncompressed in &[true, false] {
+        const SETUP_PATH: &str = "test_setup_wal";
+        const PRECOMPUTE_PATH: &str = "test_precompute_wal";
+        const SCALE: usize = 5;
+        for uncompressed in &[false, true] {
             let args = SetupArgs {
                 setup_path: SETUP_PATH.to_owned(),
                 precompute_path: PRECOMPUTE_PATH.to_owned(),
-                scale: 4,
+                scale: SCALE,
                 overwrite: true,
                 generate_secrets: true,
                 generate_precompute: true,
@@ -382,15 +389,17 @@ mod tests {
                 compress_existing: false,
             };
             BlstBackend::setup_and_save(args.into()).expect("Failed to setup KZGSettings");
+            debug!("wrote setup and precompute for uncompressed: {}", *uncompressed);
             let args = RunArgs {
                 host: "localhost".to_owned(),
                 port: 9999,
-                scale: 4,
+                scale: SCALE,
                 setup_path: Some(SETUP_PATH.to_owned()),
                 precompute_path: Some(PRECOMPUTE_PATH.to_owned()),
                 uncompressed: *uncompressed,
             };
             let backend = BlstBackend::new(Some(args.into()));
+            debug!("loaded setup and precompute for uncompressed: {}", *uncompressed);
             assert!(backend.kzg_settings.get_precomputation().is_some());
         }
         let _ = std::fs::remove_file(SETUP_PATH);
@@ -439,8 +448,8 @@ mod tests {
     #[tracing_test::traced_test]
     fn test_pipeline_from_setup() {
         // Setup defaults
-        const SETUP_PATH: &str = "test_setup";
-        const PRECOMPUTE_PATH: &str = "test_precompute";
+        const SETUP_PATH: &str = "test_setup_pipeline";
+        const PRECOMPUTE_PATH: &str = "test_precompute_pipeline";
         const SCALE: usize = 5;
         const UNCOMPRESSED: bool = false;
 
@@ -483,10 +492,16 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_decompress_existing() {
-        const SETUP_PATH: &str = "test_setup";
-        const PRECOMPUTE_PATH: &str = "test_precompute";
+        const SETUP_PATH: &str = "test_setup_de";
+        const PRECOMPUTE_PATH: &str = "test_precompute_de";
         const SCALE: usize = 5;
         const UNCOMPRESSED: bool = false;
+
+        // if files exist, remove them
+        let _ = std::fs::remove_file(SETUP_PATH);
+        let _ = std::fs::remove_file(PRECOMPUTE_PATH);
+        let _ = std::fs::remove_file(format!("{}.decompressed", SETUP_PATH));
+        let _ = std::fs::remove_file(format!("{}.decompressed", PRECOMPUTE_PATH));
 
         // First generate a compressed setup
         let setup_args = SetupArgs {
@@ -501,6 +516,10 @@ mod tests {
             compress_existing: false,
         };
         BlstBackend::setup_and_save(setup_args.into()).expect("Failed to setup KZGSettings");
+
+        // Check if files exist
+        assert!(std::path::Path::new(SETUP_PATH).exists());
+        assert!(std::path::Path::new(PRECOMPUTE_PATH).exists());
 
         // Now decompress the setup
         let setup_args = SetupArgs {
@@ -527,7 +546,7 @@ mod tests {
             scale: SCALE,
             setup_path: Some(format!("{}.decompressed", SETUP_PATH)),
             precompute_path: Some(format!("{}.decompressed", PRECOMPUTE_PATH)),
-            uncompressed: UNCOMPRESSED,
+            uncompressed: !UNCOMPRESSED,
         };
 
         let backend = BlstBackend::new(Some(run_args.into()));
@@ -542,10 +561,16 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_compress_existing() {
-        const SETUP_PATH: &str = "test_setup";
-        const PRECOMPUTE_PATH: &str = "test_precompute";
+        const SETUP_PATH: &str = "test_setup_ce";
+        const PRECOMPUTE_PATH: &str = "test_precompute_ce";
         const SCALE: usize = 5;
         const UNCOMPRESSED: bool = true;
+
+        // if files exist, remove them
+        let _ = std::fs::remove_file(SETUP_PATH);
+        let _ = std::fs::remove_file(PRECOMPUTE_PATH);
+        let _ = std::fs::remove_file(format!("{}.compressed", SETUP_PATH));
+        let _ = std::fs::remove_file(format!("{}.compressed", PRECOMPUTE_PATH));
 
         // First generate a decompressed setup
         let setup_args = SetupArgs {
@@ -560,8 +585,12 @@ mod tests {
             compress_existing: false,
         };
         BlstBackend::setup_and_save(setup_args.into()).expect("Failed to setup KZGSettings");
+        
+        // Check if files exist
+        assert!(std::path::Path::new(SETUP_PATH).exists());
+        assert!(std::path::Path::new(PRECOMPUTE_PATH).exists());
 
-        // Now decompress the setup
+        // Now compress the setup
         let setup_args = SetupArgs {
             setup_path: SETUP_PATH.to_string(),
             precompute_path: PRECOMPUTE_PATH.to_string(),
@@ -586,7 +615,7 @@ mod tests {
             scale: SCALE,
             setup_path: Some(format!("{}.compressed", SETUP_PATH)),
             precompute_path: Some(format!("{}.compressed", PRECOMPUTE_PATH)),
-            uncompressed: UNCOMPRESSED,
+            uncompressed: !UNCOMPRESSED,
         };
 
         let backend = BlstBackend::new(Some(run_args.into()));
