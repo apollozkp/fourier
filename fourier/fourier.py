@@ -1,6 +1,7 @@
 import json
 import subprocess
 import time
+import os
 from typing import List
 
 import requests
@@ -125,7 +126,7 @@ class CLI:
         overwrite=False,
         scale=None,
         precompute_path=None,
-        generate_secrets=False,
+        generate_setup=False,
         generate_precompute=False,
         uncompressed=False,
         compress_existing=False,
@@ -135,7 +136,7 @@ class CLI:
         PRECOMPUTE_PATH_LONG = "--precompute-path"
         SCALE_LONG = "--scale"
         OVERWRITE_LONG = "--overwrite"
-        GENERATE_SECRETS_LONG = "--generate-secrets"
+        GENERATE_SETUP_LONG = "--generate-setup"
         GENERATE_PRECOMPUTE_LONG = "--generate-precompute"
         UNCOMPRESSED_LONG = "--uncompressed"
         COMPRESS_EXISTING_LONG = "--compress-existing"
@@ -149,8 +150,8 @@ class CLI:
             args.extend([OVERWRITE_LONG])
         if scale:
             args.extend([SCALE_LONG, str(scale)])
-        if generate_secrets:
-            args.extend([GENERATE_SECRETS_LONG])
+        if generate_setup:
+            args.extend([GENERATE_SETUP_LONG])
         if generate_precompute:
             args.extend([GENERATE_PRECOMPUTE_LONG])
         if uncompressed:

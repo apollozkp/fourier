@@ -67,9 +67,9 @@ struct SetupArgs {
     #[clap(long, default_value_t = false)]
     overwrite: bool,
 
-    // Generate the secrets on setup, false will attempt to load them from the file
+    // Generate the setup on setup, false will attempt to load them from the file
     #[clap(long, default_value_t = false)]
-    generate_secrets: bool,
+    generate_setup: bool,
 
     // Generate the precomputed values on setup, false will attempt to load them from the file
     #[clap(long, default_value_t = false)]
