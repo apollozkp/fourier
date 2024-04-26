@@ -1,7 +1,7 @@
 import json
+import os
 import subprocess
 import time
-import os
 from typing import List
 
 import requests
@@ -180,6 +180,7 @@ class Client:
         setup_path=DEFAULT_SETUP_PATH,
         precompute_path=DEFAULT_PRECOMPUTE_PATH,
         bin=DEFAULT_BIN,
+        uncompressed=False,
     ):
         self.host = host
         self.port = port
@@ -188,6 +189,7 @@ class Client:
         self.precompute_path = (
             precompute_path if os.path.exists(precompute_path) else None
         )
+        self.uncompressed = uncompressed
 
     def endpoint(self):
         return f"http://{self.host}:{self.port}"
@@ -201,6 +203,7 @@ class Client:
             port=self.port,
             setup_path=self.setup_path,
             precompute_path=self.precompute_path,
+            uncompressed=self.uncompressed,
             scale=scale,
         )
         return self.cli.is_running()
@@ -285,7 +288,7 @@ def commit(rpc, poly):
     return None
 
 
-def open(rpc, poly, x):
+def _open(rpc, poly, x):
     with rpc.open(poly, x) as resp:
         data = resp.json()
         if data.get("error"):
@@ -345,13 +348,11 @@ def prove(rpc, poly):
 
 
 if __name__ == "__main__":
-    import os
-
     os.environ["RUST_LOG"] = "debug"
     HOST = "localhost"
     PORT = 1337
-    SETUP_PATH = "setup"
-    PRECOMPUTE_PATH = "precompute_uncompressed"
+    SETUP_PATH = "setup.decompressed"
+    PRECOMPUTE_PATH = "precompute.decompressed"
     BIN = "target/release/fourier"
     setup_path = SETUP_PATH if os.path.exists(SETUP_PATH) else None
 
@@ -361,21 +362,22 @@ if __name__ == "__main__":
         setup_path=SETUP_PATH,
         precompute_path=PRECOMPUTE_PATH,
         bin=BIN,
+        uncompressed=True,
     )
     precompute_path = PRECOMPUTE_PATH if os.path.exists(PRECOMPUTE_PATH) else None
-    rpc.start(scale=4)
+    rpc.start(scale=20)
 
     # Generate initial params
-    f = random_poly(rpc, 10)
+    f = random_poly(rpc, 5)
     x = random_point(rpc)
     y = eval_poly(rpc, f, x)
-    print(f"Generated polynomial: {f}")
-    print(f"Generated point: {x}")
-    print(f"Evaluated polynomial: {y}")
+    print(f"Generated f: {f}")
+    print(f"Generated x: {x}")
+    print(f"Generated y: {y}")
 
     # Commit, open and verify
     commitment = commit(rpc, f)
-    proof = open(rpc, f, x)
+    proof = _open(rpc, f, x)
     valid = verify(rpc, proof, x, y, commitment)
     assert valid
     print(f"Proof is valid: {valid}")
