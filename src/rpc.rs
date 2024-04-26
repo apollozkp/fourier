@@ -46,15 +46,18 @@ pub enum JsonRpcParams {
         x: String,
         y: String,
         commitment: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         encoding: Option<Encoding>,
     },
     Open {
         poly: Vec<String>,
         x: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         encoding: Option<Encoding>,
     },
     Commit {
         poly: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         encoding: Option<Encoding>,
     },
     RandomPoly {
@@ -63,6 +66,7 @@ pub enum JsonRpcParams {
         encoding: Option<Encoding>,
     },
     RandomPoint {
+        #[serde(skip_serializing_if = "Option::is_none")]
         encoding: Option<Encoding>,
     },
 }
