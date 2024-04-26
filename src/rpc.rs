@@ -9,6 +9,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tracing::{error, info};
 
+use crate::engine::backend::Encoding;
 use crate::RunArgs;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -45,18 +46,25 @@ pub enum JsonRpcParams {
         x: String,
         y: String,
         commitment: String,
+        encoding: Option<Encoding>,
     },
     Open {
         poly: Vec<String>,
         x: String,
+        encoding: Option<Encoding>,
     },
     Commit {
         poly: Vec<String>,
+        encoding: Option<Encoding>,
     },
     RandomPoly {
         degree: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        encoding: Option<Encoding>,
     },
-    RandomPoint,
+    RandomPoint {
+        encoding: Option<Encoding>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -180,13 +188,14 @@ where
     }
 
     fn handle_commit(&self, req: JsonRpcRequest) -> JsonRpcResponse {
-        let (result, error) = if let Some(JsonRpcParams::Commit { ref poly }) = req.params {
-            match self.backend.parse_poly_from_str(poly) {
+        let (result, error) = if let Some(JsonRpcParams::Commit { ref poly, encoding }) = req.params
+        {
+            let encoding = encoding.unwrap_or(Encoding::from(poly));
+            match self.backend.parse_poly_from_str(poly, Some(encoding)) {
                 Ok(poly) => (
                     Some(JsonRpcResult::Commit {
-                        commitment: hex::encode(
-                            self.backend.commit_to_poly(poly).unwrap().to_bytes(),
-                        ),
+                        commitment: encoding
+                            .encode(&self.backend.commit_to_poly(poly).unwrap().to_bytes()),
                     }),
                     None,
                 ),
@@ -211,17 +220,24 @@ where
     }
 
     fn handle_open(&self, req: JsonRpcRequest) -> JsonRpcResponse {
-        let (result, err) = if let Some(JsonRpcParams::Open { ref poly, ref x }) = req.params {
+        let (result, err) = if let Some(JsonRpcParams::Open {
+            ref poly,
+            ref x,
+            encoding,
+        }) = req.params
+        {
+            let encoding = encoding.unwrap_or(Encoding::from(poly));
             match (|| {
                 Ok((
-                    self.backend.parse_poly_from_str(poly)?,
-                    self.backend.parse_point_from_str(x)?,
+                    self.backend.parse_poly_from_str(poly, Some(encoding))?,
+                    self.backend.parse_point_from_str(x, Some(encoding))?,
                 ))
             })() {
                 Ok((poly, x)) => (
                     Some(JsonRpcResult::Open {
-                        proof: hex::encode(
-                            self.backend
+                        proof: encoding.encode(
+                            &self
+                                .backend
                                 .compute_proof_single(poly, x)
                                 .unwrap()
                                 .to_bytes(),
@@ -255,14 +271,15 @@ where
             ref x,
             ref y,
             ref commitment,
+            encoding,
         }) = req.params
         {
             match (|| {
                 Ok((
-                    self.backend.parse_g1_from_str(proof)?,
-                    self.backend.parse_point_from_str(x)?,
-                    self.backend.parse_point_from_str(y)?,
-                    self.backend.parse_g1_from_str(commitment)?,
+                    self.backend.parse_g1_from_str(proof, encoding)?,
+                    self.backend.parse_point_from_str(x, encoding)?,
+                    self.backend.parse_point_from_str(y, encoding)?,
+                    self.backend.parse_g1_from_str(commitment, encoding)?,
                 ))
             })() {
                 Ok((proof, x, y, commitment)) => (
@@ -295,7 +312,9 @@ where
     }
 
     fn handle_random_poly(&self, req: JsonRpcRequest) -> JsonRpcResponse {
-        let (result, err) = if let Some(JsonRpcParams::RandomPoly { degree }) = req.params {
+        let (result, err) = if let Some(JsonRpcParams::RandomPoly { degree, encoding }) = req.params
+        {
+            let encoding = encoding.unwrap_or(Encoding::default());
             (
                 Some(JsonRpcResult::RandomPoly {
                     poly: self
@@ -303,7 +322,7 @@ where
                         .random_poly(degree)
                         .get_coeffs()
                         .iter()
-                        .map(|x| hex::encode(x.to_bytes()))
+                        .map(|x| encoding.encode(&x.to_bytes()))
                         .collect(),
                 }),
                 None,
@@ -321,9 +340,10 @@ where
     }
 
     fn handle_random_point(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let encoding = Encoding::default();
         req.response(
             Some(JsonRpcResult::RandomPoint {
-                point: hex::encode(self.backend.random_point().to_bytes()),
+                point: encoding.encode(&self.backend.random_point().to_bytes()),
             }),
             None,
         )
@@ -333,16 +353,22 @@ where
         info!("Handling evaluate request{:?}", req);
         // TODO: This is gross, params are matched to Open since the enum is untagged
         // and the Open variant is the first one. This should be fixed.
-        let (result, err) = if let Some(JsonRpcParams::Open { ref poly, ref x }) = req.params {
+        let (result, err) = if let Some(JsonRpcParams::Open {
+            ref poly,
+            ref x,
+            encoding,
+        }) = req.params
+        {
+            let encoding = encoding.unwrap_or(Encoding::from(poly));
             match (|| {
                 Ok((
-                    self.backend.parse_poly_from_str(poly)?,
-                    self.backend.parse_point_from_str(x)?,
+                    self.backend.parse_poly_from_str(poly, Some(encoding))?,
+                    self.backend.parse_point_from_str(x, Some(encoding))?,
                 ))
             })() {
                 Ok((poly, x)) => (
                     Some(JsonRpcResult::Evaluate {
-                        y: hex::encode(self.backend.evaluate(&poly, x).to_bytes()),
+                        y: encoding.encode(&self.backend.evaluate(&poly, x).to_bytes()),
                     }),
                     None,
                 ),
@@ -367,23 +393,26 @@ where
     }
 
     fn handle_prove(&self, req: JsonRpcRequest) -> JsonRpcResponse {
-        let (result, err) = if let Some(JsonRpcParams::Commit { ref poly }) = req.params {
-            match self.backend.parse_poly_from_str(poly) {
+        let (result, err) = if let Some(JsonRpcParams::Commit { ref poly, encoding }) = req.params {
+            let encoding = encoding.unwrap_or(Encoding::from(poly));
+            match self.backend.parse_poly_from_str(poly, Some(encoding)) {
                 Ok(poly) => {
                     let x = Fr::rand();
                     let y = poly.eval(&x);
                     (
                         Some(JsonRpcResult::Prove {
-                            commitment: hex::encode(
-                                self.backend
+                            commitment: encoding.encode(
+                                &self
+                                    .backend
                                     .commit_to_poly(poly.clone())
                                     .unwrap()
                                     .to_bytes(),
                             ),
-                            y: hex::encode(y.to_bytes()),
-                            x: hex::encode(x.to_bytes()),
-                            proof: hex::encode(
-                                self.backend
+                            y: encoding.encode(&y.to_bytes()),
+                            x: encoding.encode(&x.to_bytes()),
+                            proof: encoding.encode(
+                                &self
+                                    .backend
                                     .compute_proof_single(poly, x)
                                     .unwrap()
                                     .to_bytes(),
@@ -549,6 +578,40 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::{backend::Backend, config::BackendConfig};
+
+    const POLY: [&str; 6] = [
+        "0cd70a3a63e25a07f3068874e8fdf9a5238b5b391b3b88d69aeb63815d83d6bf",
+        "347600725caf9aa43827b6a61f44a28b94441178ee5b4bd76bc9875ec3e9b4f7",
+        "689323bfea2caecbc9deb55057ad82939d62ce7087c5df26845bfb352b76bb43",
+        "1475ce3ccbbe2534b6bda56880d5cabca486521a06be0b119a398f047f201135",
+        "40480c2ba4f4d4d6951bf385eacdee2e62deaea98de2fbb6fa4b579203b66a70",
+        "2fd31a457aa075a3be8c9ebd982f4544f477f0d7730a02a63807b19c9ba62e53",
+    ];
+    const X: &str = "3970b257e06b2db2e040dee0d8be7242af39e009121b7527e2359c1adc7c35db";
+    const Y: &str = "0eacb75ad74a19f048530e1587df7c5e746f834f3c2e17dbbbba17df0fe91f3c";
+
+    const POLY_BASE64: [&str; 6] = [
+        "DNcKOmPiWgfzBoh06P35pSOLWzkbO4jWmutjgV2D1r8",
+        "NHYAclyvmqQ4J7amH0Sii5REEXjuW0vXa8mHXsPptPc",
+        "aJMjv+osrsvJ3rVQV62Ck51iznCHxd8mhFv7NSt2u0M",
+        "FHXOPMu+JTS2vaVogNXKvKSGUhoGvgsRmjmPBH8gETU",
+        "QEgMK6T01NaVG/OF6s3uLmLerqmN4vu2+ktXkgO2anA",
+        "L9MaRXqgdaO+jJ69mC9FRPR38NdzCgKmOAexnJumLlM",
+    ];
+
+    const X_BASE64: &str = "OXCyV+BrLbLgQN7g2L5yQq854AkSG3Un4jWcGtx8Nds";
+    const Y_BASE64: &str = "Dqy3WtdKGfBIUw4Vh998XnRvg088Lhfbu7oX3w/pHzw";
+
+    fn test_config() -> BackendConfig {
+        BackendConfig {
+            setup_path: None,
+            precompute_path: None,
+            scale: 5,
+            skip_precompute: false,
+            compressed: true,
+        }
+    }
 
     #[test]
     #[tracing_test::traced_test]
@@ -560,4 +623,107 @@ mod tests {
         assert!(deserialized.is_ok());
         assert_eq!(raw_request, deserialized.unwrap());
     }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_random_polynomial_hex() {
+        let config = test_config();
+        let backend = crate::engine::blst::BlstBackend::new(Some(config));
+        let handler = RpcHandler::new(Arc::new(backend));
+        let raw_request = r#"{"jsonrpc":"2.0","method":"randomPoly","params":{"degree":3},"id":1}"#;
+        let req = serde_json::from_str::<JsonRpcRequest>(raw_request).unwrap();
+        tracing::debug!("Request: {:?}", req);
+        let res = handler.handle(req).await;
+        tracing::debug!("Response: {:?}", res);
+        assert!(res.result.is_some());
+        assert!(res.error.is_none());
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_random_polynomial_base64() {
+        let config = test_config();
+        let backend = crate::engine::blst::BlstBackend::new(Some(config));
+        let handler = RpcHandler::new(Arc::new(backend));
+        let raw_request = r#"{"jsonrpc":"2.0","method":"randomPoly","params":{"degree":3, "encoding": "base64"},"id":1}"#;
+        let req = serde_json::from_str::<JsonRpcRequest>(raw_request).unwrap();
+        tracing::debug!("Request: {:?}", req);
+        let res = handler.handle(req).await;
+        tracing::debug!("Response: {:?}", res);
+        assert!(res.result.is_some());
+        assert!(res.error.is_none());
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_commit_default() {
+        let config = test_config();
+        let backend = crate::engine::blst::BlstBackend::new(Some(config));
+        let handler = RpcHandler::new(Arc::new(backend));
+        let raw_request = format!(
+            r#"{{"jsonrpc":"2.0","method":"commit","params":{{"poly":{:?}}},"id":1}}"#,
+            POLY
+        );
+        let req = serde_json::from_str::<JsonRpcRequest>(&raw_request).unwrap();
+        tracing::debug!("Request: {:?}", req);
+        let res = handler.handle(req).await;
+        tracing::debug!("Response: {:?}", res);
+        assert!(res.result.is_some());
+        assert!(res.error.is_none());
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_commit_base64_inferred() {
+        let config = test_config();
+        let backend = crate::engine::blst::BlstBackend::new(Some(config));
+        let handler = RpcHandler::new(Arc::new(backend));
+        let raw_request = format!(
+            r#"{{"jsonrpc":"2.0","method":"commit","params":{{"poly":{:?}}},"id":1}}"#,
+            POLY_BASE64
+        );
+        let req = serde_json::from_str::<JsonRpcRequest>(&raw_request).unwrap();
+        tracing::debug!("Request: {:?}", req);
+        let res = handler.handle(req).await;
+        tracing::debug!("Response: {:?}", res);
+        assert!(res.result.is_some());
+        assert!(res.error.is_none());
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_commit_base64_explicit() {
+        let config = test_config();
+        let backend = crate::engine::blst::BlstBackend::new(Some(config));
+        let handler = RpcHandler::new(Arc::new(backend));
+        let raw_request = format!(
+            r#"{{"jsonrpc":"2.0","method":"commit","params":{{"poly":{:?}, "encoding": "base64"}},"id":1}}"#,
+            POLY_BASE64
+        );
+        let req = serde_json::from_str::<JsonRpcRequest>(&raw_request).unwrap();
+        tracing::debug!("Request: {:?}", req);
+        let res = handler.handle(req).await;
+        tracing::debug!("Response: {:?}", res);
+        assert!(res.result.is_some());
+        assert!(res.error.is_none());
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_commit_base64_explicit_wrong() {
+        let config = test_config();
+        let backend = crate::engine::blst::BlstBackend::new(Some(config));
+        let handler = RpcHandler::new(Arc::new(backend));
+        let raw_request = format!(
+            r#"{{"jsonrpc":"2.0","method":"commit","params":{{"poly":{:?}, "encoding": "hex"}},"id":1}}"#,
+            POLY_BASE64
+        );
+        let req = serde_json::from_str::<JsonRpcRequest>(&raw_request).unwrap();
+        tracing::debug!("Request: {:?}", req);
+        let res = handler.handle(req).await;
+        tracing::debug!("Response: {:?}", res);
+        assert!(res.result.is_none());
+        assert!(res.error.is_some());
+    }
+
 }

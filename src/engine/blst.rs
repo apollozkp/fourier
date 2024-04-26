@@ -11,6 +11,8 @@ use tracing::{debug, warn};
 
 use crate::engine::config::{BackendConfig, SetupConfig};
 
+use super::backend::Encoding;
+
 pub enum PrecomputeInstruction {
     Skip,
     Generate,
@@ -220,20 +222,27 @@ impl crate::engine::backend::Backend for BlstBackend {
             .check_proof_single(&commitment, &proof, &x, &y)
     }
 
-    fn parse_point_from_str(&self, s: &str) -> Result<Self::Fr, String> {
-        Fr::from_bytes(hex::decode(s).map_err(|e| e.to_string())?.as_slice())
+    fn parse_point_from_str(
+        &self,
+        s: &str,
+        encoding: Option<Encoding>,
+    ) -> Result<Self::Fr, String> {
+        Fr::from_bytes(&encoding.unwrap_or(Encoding::from(s)).decode(s)?)
     }
 
-    fn parse_poly_from_str(&self, s: &[String]) -> Result<Self::Poly, String> {
-        Ok(Self::Poly::from_coeffs(
-            &s.iter()
-                .map(|x| Fr::from_bytes(hex::decode(x).map_err(|e| e.to_string())?.as_slice()))
-                .collect::<Result<Vec<Self::Fr>, String>>()?,
-        ))
+    fn parse_poly_from_str(
+        &self,
+        s: &[String],
+        encoding: Option<Encoding>,
+    ) -> Result<Self::Poly, String> {
+        Ok(Self::Poly::from_coeffs(&s
+            .iter()
+            .map(|x| Fr::from_bytes(&encoding.unwrap_or(Encoding::from(s)).decode(x)?))
+            .collect::<Result<Vec<Self::Fr>, String>>()?))
     }
 
-    fn parse_g1_from_str(&self, s: &str) -> Result<Self::G1, String> {
-        G1::from_bytes(hex::decode(s).map_err(|e| e.to_string())?.as_slice())
+    fn parse_g1_from_str(&self, s: &str, encoding: Option<Encoding>) -> Result<Self::G1, String> {
+        G1::from_bytes(&encoding.unwrap_or(Encoding::from(s)).decode(s)?)
     }
 
     fn random_poly(&self, degree: usize) -> Self::Poly {
@@ -277,7 +286,10 @@ impl crate::engine::backend::Backend for BlstBackend {
             )
         };
 
-        debug!("Saving to setup: {}, precompute: {}", setup_path, precompute_path);
+        debug!(
+            "Saving to setup: {}, precompute: {}",
+            setup_path, precompute_path
+        );
         backend.save_to_file(
             Some(setup_path.as_str()),
             Some(precompute_path.as_str()),
@@ -374,7 +386,6 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_write_and_load_precompute() {
-
         const SETUP_PATH: &str = "test_setup_wal";
         const PRECOMPUTE_PATH: &str = "test_precompute_wal";
         const SCALE: usize = 5;
@@ -391,7 +402,10 @@ mod tests {
                 compress_existing: false,
             };
             BlstBackend::setup_and_save(args.into()).expect("Failed to setup KZGSettings");
-            debug!("wrote setup and precompute for uncompressed: {}", *uncompressed);
+            debug!(
+                "wrote setup and precompute for uncompressed: {}",
+                *uncompressed
+            );
             let args = RunArgs {
                 host: "localhost".to_owned(),
                 port: 9999,
@@ -401,7 +415,10 @@ mod tests {
                 uncompressed: *uncompressed,
             };
             let backend = BlstBackend::new(Some(args.into()));
-            debug!("loaded setup and precompute for uncompressed: {}", *uncompressed);
+            debug!(
+                "loaded setup and precompute for uncompressed: {}",
+                *uncompressed
+            );
             assert!(backend.kzg_settings.get_precomputation().is_some());
         }
         let _ = std::fs::remove_file(SETUP_PATH);
@@ -415,17 +432,18 @@ mod tests {
                     .iter()
                     .map(|x| x.to_string())
                     .collect::<Vec<String>>(),
+                None
             )
             .expect("Failed to parse poly");
 
         let x = backend
-            .parse_point_from_str(TEST_POINT)
+            .parse_point_from_str(TEST_POINT, None)
             .expect("Failed to parse point");
         debug!("x: {:?}", hex::encode(x.to_bytes()));
 
         let y = poly.eval(&x);
         let expected = backend
-            .parse_point_from_str(TEST_EVAL)
+            .parse_point_from_str(TEST_EVAL, None)
             .expect("Failed to parse point");
         debug!("y: {:?}", hex::encode(y.to_bytes()));
         assert_eq!(y, expected);
@@ -536,10 +554,12 @@ mod tests {
             compress_existing: false,
         };
         BlstBackend::setup_and_save(setup_args.into()).expect("Failed to setup KZGSettings");
-        
+
         // Check if files exist
         assert!(std::path::Path::new(format!("{}.decompressed", SETUP_PATH).as_str()).exists());
-        assert!(std::path::Path::new(format!("{}.decompressed", PRECOMPUTE_PATH).as_str()).exists());
+        assert!(
+            std::path::Path::new(format!("{}.decompressed", PRECOMPUTE_PATH).as_str()).exists()
+        );
 
         // Now load the decompressed setup
         let run_args = RunArgs {
@@ -587,7 +607,7 @@ mod tests {
             compress_existing: false,
         };
         BlstBackend::setup_and_save(setup_args.into()).expect("Failed to setup KZGSettings");
-        
+
         // Check if files exist
         assert!(std::path::Path::new(SETUP_PATH).exists());
         assert!(std::path::Path::new(PRECOMPUTE_PATH).exists());
@@ -605,7 +625,7 @@ mod tests {
             compress_existing: true,
         };
         BlstBackend::setup_and_save(setup_args.into()).expect("Failed to setup KZGSettings");
-        
+
         // Check if files exist
         assert!(std::path::Path::new(format!("{}.compressed", SETUP_PATH).as_str()).exists());
         assert!(std::path::Path::new(format!("{}.compressed", PRECOMPUTE_PATH).as_str()).exists());
@@ -628,10 +648,4 @@ mod tests {
         let _ = std::fs::remove_file(format!("{}.compressed", SETUP_PATH));
         let _ = std::fs::remove_file(format!("{}.compressed", PRECOMPUTE_PATH));
     }
-
-
-
-
-
-
 }
