@@ -827,7 +827,6 @@ checksum = "adad44e29e4c806119491a7f06f03de4d1af22c3a680dd47f1e6e179439d1f56"
 name = "rust-kzg-blst"
 version = "0.1.0"
 source = "git+https://github.com/apollozkp/rust-kzg.git?branch=optional_compression#49cda716b08410c2ea3630b7fae3d84ea975d555"
-
 dependencies = [
  "blst",
  "crossbeam-channel",
