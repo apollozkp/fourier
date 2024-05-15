@@ -13,10 +13,6 @@ use rust_kzg_blst::types::g1::FsG1;
 use rust_kzg_blst::types::g2::FsG2;
 use rust_kzg_blst::types::poly::FsPoly;
 
-use super::backend::Backend;
-use super::blst::BlstBackend;
-use super::config::BackendConfig;
-
 fn polysum(poly: &mut FsPoly, other: &FsPoly) {
     if poly.len() < other.len() {
         poly.coeffs.resize(other.len(), FsFr::zero());
@@ -91,7 +87,8 @@ impl BivariateFsPolynomial {
     }
 
     pub fn mul(&self, other: &BivariateFsPolynomial) -> BivariateFsPolynomial {
-        let mut result = vec![FsPoly::from_coeffs(&[FsFr::zero()]); self.parts.len() + other.parts.len() - 1];
+        let mut result =
+            vec![FsPoly::from_coeffs(&[FsFr::zero()]); self.parts.len() + other.parts.len() - 1];
         for (i, f) in self.parts.iter().enumerate() {
             for (j, g) in other.parts.iter().enumerate() {
                 let mut h = f.clone();
@@ -169,11 +166,19 @@ impl PianoSettings {
         self.g
     }
 
+    /// Get g^{tau_X^i}
     pub fn g_tau_x(&self, i: usize) -> FsG1 {
+        if i == 0 {
+            return self.g();
+        }
         (0..i).fold(self.g_tau_x, |acc, _| acc.add(&self.g_tau_x))
     }
 
+    /// Get g^{tau_Y^i}
     pub fn g_tau_y(&self, i: usize) -> FsG1 {
+        if i == 0 {
+            return self.g();
+        }
         (0..i).fold(self.g_tau_y, |acc, _| acc.add(&self.g_tau_y))
     }
 
@@ -208,8 +213,8 @@ pub fn generate_trusted_setup(
     let g = rust_kzg_blst::consts::G1_GENERATOR;
     let g2 = rust_kzg_blst::consts::G2_GENERATOR;
 
-    let T = 2usize.pow(fft_settings.t() as u32);
-    let M = 2usize.pow(fft_settings.m() as u32);
+    let sub_circuit_size = 2usize.pow(fft_settings.t() as u32);
+    let machine_count = 2usize.pow(fft_settings.m() as u32);
 
     let g_tau_x = g.mul(&tau_x);
     let g_tau_y = g.mul(&tau_y);
@@ -217,9 +222,9 @@ pub fn generate_trusted_setup(
     let g2_tau_x = g2.mul(&tau_x);
     let g2_tau_y = g2.mul(&tau_y);
 
-    let u = (0..M)
+    let u = (0..machine_count)
         .map(|i| {
-            (0..T)
+            (0..sub_circuit_size)
                 .map(|j| {
                     let r = fft_settings.right_lagrange_poly(i).unwrap();
                     let l = fft_settings.left_lagrange_poly(j).unwrap();
@@ -231,9 +236,9 @@ pub fn generate_trusted_setup(
         })
         .collect();
 
-    let u2 = (0..M)
+    let u2 = (0..machine_count)
         .map(|i| {
-            (0..T)
+            (0..sub_circuit_size)
                 .map(|j| {
                     let r = fft_settings.right_lagrange_poly(i).unwrap();
                     let l = fft_settings.left_lagrange_poly(j).unwrap();
@@ -320,14 +325,14 @@ impl PianoFFTSettings {
 
     /// Get the j-th root of unity for the left FFT
     /// omega_X^j = omega_t^j
-    pub fn left_root_of_unity(&self, j: usize) -> FsFr {
-        self.left.get_roots_of_unity_at(j)
+    pub fn left_expanded_root_of_unity(&self, j: usize) -> FsFr {
+        self.left.get_expanded_roots_of_unity_at(j)
     }
 
     /// Get the i-th root of unity for the right FFT
     /// omega_Y^i = omega_m^i
-    pub fn right_root_of_unity(&self, i: usize) -> FsFr {
-        self.right.get_roots_of_unity_at(i)
+    pub fn right_expanded_root_of_unity(&self, i: usize) -> FsFr {
+        self.right.get_expanded_roots_of_unity_at(i)
     }
 
     /// Get the j-th lagrange polynomial for the left FFT
@@ -364,18 +369,19 @@ impl PianoBackend {
         }
     }
 
-    /// Commit to a polynomial f(X) as if we are machine i
+    /// Commit to a polynomial f_i(X) as if we are machine i
     /// 1. change the polynomial to the Lagrange basis f(X) = sum_{j=0}^{t-1} f_j L_j(X)
     /// 2. Then compute the commitment as com_f = prod_{j=0}^{t-1} U_{i, j}^{f_j}
-    pub fn commit(&self, i: usize, poly: FsPoly) -> Result<FsG1, String> {
+    ///     = prod g^{R_i(tau_Y) * L_j(tau_X) * f_j} = g^{R_i(tau_Y) * f_i(tau_X)}
+    /// So essentially committing to R_i(tau_Y) * f_i(X)
+    pub fn commit(&self, i: usize, poly: &FsPoly) -> Result<FsG1, String> {
         let cob_coeffs = self.fft_settings.fft_left(&poly.coeffs, false)?;
         Ok(cob_coeffs
             .iter()
             .enumerate()
             .fold(None, |acc, (j, c)| {
-                acc.map_or(Some(self.piano_settings.u(i, j).mul(c)), |a: FsG1| {
-                    Some(a.add(&self.piano_settings.u(i, j).mul(c)))
-                })
+                let term = self.piano_settings.u(i, j).mul(c);
+                acc.map_or(Some(term), |a: FsG1| Some(a.add(&term)))
             })
             .unwrap())
     }
@@ -393,11 +399,11 @@ impl PianoBackend {
     /// Open a polynomial f_i(X) as if we are machine i
     /// 1. Evaluate f_i(alpha)
     /// 2. Compute q_0^{(i})}(X) = (f_i(X) - f_i(alpha)) / (X - alpha)
-    /// 3. Compute pi_0^{(i)} = g^{R(tau_Y) * q_0^{(i)}(tao_X)}
-    pub fn open(&self, i: usize, poly: FsPoly, alpha: FsFr) -> Result<(FsFr, FsG1), String> {
+    /// 3. Compute pi_0^{(i)} = g^{R(tau_Y) * q_0^{(i)}(tau_X)}
+    pub fn open(&self, i: usize, poly: &FsPoly, alpha: &FsFr) -> Result<(FsFr, FsG1), String> {
         tracing::debug!("poly coeffs len = {}", poly.coeffs.len());
         // Evaluate the polynomial at alpha
-        let y = poly.eval(&alpha);
+        let y = poly.eval(alpha);
 
         // Compute the quotient polynomial
 
@@ -437,9 +443,12 @@ impl PianoBackend {
 
     /// Open a polynomial f(X) by combining the openings of all machines
     /// 1. Compute the proof pi_0 = prod pi_0^{(i)}
+    ///                           = prod g^{R_i(tau_Y) q_0^{(i)}(tau_X)}
+    ///                           = prod g^{R_i(tau_Y) (f_i(tau_X) - f_i(alpha)) / (tau_X - alpha)}
+    ///                           = g^{sum R_i(tau_Y) f_i(tau_X) / (tau_X - alpha)}
     /// 2. Recover f(Y, alpha) = sum R_i(Y) f_i(alpha)
     /// 3. Evaluate z = f(beta, alpha)
-    /// 4. Compute the quotient polynomial (f(Y, alpha) - z) / (Y - beta)
+    /// 4. Compute the quotient polynomial q_1(X) = (f(Y, alpha) - z) / (Y - beta)
     /// 5. Compute the proof pi_1 = g^{q_1(tau_Y)}
     /// 6. Return (z, pi_f) = (z, (pi_0, pi_1))
     pub fn master_open(
@@ -459,7 +468,7 @@ impl PianoBackend {
         // Recover f(Y, alpha) = sum R_i(Y) f_i(alpha)
         let poly = FsPoly::from_coeffs(&self.fft_settings.fft_right(evals, true).unwrap());
 
-        // Evaluate f(beta, alpha)
+        // Evaluate f(Y, alpha) at beta
         let z = poly.eval(beta);
 
         // Compute quotient poly
@@ -474,7 +483,7 @@ impl PianoBackend {
         let q = numerator.div(&denominator)?;
 
         // compute g^q(tau_Y)
-        // Change of basis
+        // using g^{q(tau_Y)} = prod g^{q_j tau_Y^j} = prod (g^{tau_Y})^q_j
         let pi1 = q
             .coeffs
             .iter()
@@ -489,8 +498,81 @@ impl PianoBackend {
         Ok((z, (pi0, pi1)))
     }
 
+    /// Verify a single opening of a polynomial f_i(X) from machine i
+    /// Our commitment and proof are actually of f'(X) = g^{R_i(tau_Y) * f_i(X)}
+    /// But y = f_i(alpha)
+    /// We need y' = f'(alpha) = g^{R_i(tau_Y) * f_i(alpha)}
+    /// We have g^{tau_Y}, so we can compute g^{R_i(tau_Y)} and then g^{R_i(tau_Y) * y}
+    /// Then we validate that e(commitment - y', g) == e(pi, g^{tau_X - alpha})
+    pub fn verify_single(
+        &self,
+        i: usize,
+        commitment: &FsG1,
+        alpha: &FsFr,
+        y: &FsFr,
+        pi: &FsG1,
+    ) -> bool {
+
+        // Compute y' = g^{R_i(tau_Y) * y}
+        let right_lagrange_poly = self.fft_settings.right_lagrange_poly(i).unwrap();
+        let eval = right_lagrange_poly.coeffs.iter().enumerate().fold(None, |acc, (j, c)| {
+            let term = self.piano_settings.g_tau_y(j).mul(c);
+            acc.map_or(Some(term), |a: FsG1| Some(a.add(&term)))
+        }).unwrap();
+        let g_y_prime = eval.mul(y);
+
+        // Compute g^{R_i(tau_Y) * f_i(tau_X) - y'}
+        let commitment_minus_y_prime = commitment.sub(&g_y_prime);
+
+        // Compute g^{tau_X - alpha}
+        let tau_minus_alpha = self
+            .piano_settings
+            .g2_tau_x()
+            .sub(&self.piano_settings.g2().mul(alpha));
+
+        Self::pairings_verify_single(
+            &commitment_minus_y_prime,
+            &self.piano_settings.g2(),
+            pi,
+            &tau_minus_alpha,
+        )
+    }
+
+    fn pairings_verify_single(a1: &FsG1, a2: &FsG2, b1: &FsG1, b2: &FsG2) -> bool {
+        use blst::{
+            blst_fp12_is_one, blst_p1_affine, blst_p1_cneg, blst_p1_to_affine, blst_p2_affine,
+            blst_p2_to_affine, Pairing,
+        };
+
+        let mut aa1 = blst_p1_affine::default();
+        let mut aa2 = blst_p2_affine::default();
+        let mut bb1 = blst_p1_affine::default();
+        let mut bb2 = blst_p2_affine::default();
+
+        // As an optimisation, we want to invert one of the pairings
+        // so we negate one of the points
+        let mut a1neg: FsG1 = *a1;
+        unsafe {
+            blst_p1_cneg(&mut a1neg.0, true);
+            blst_p1_to_affine(&mut aa1, &a1neg.0);
+            blst_p2_to_affine(&mut aa2, &a2.0);
+
+            blst_p1_to_affine(&mut bb1, &b1.0);
+            blst_p2_to_affine(&mut bb2, &b2.0);
+
+            let dst = [0u8; 3];
+            let mut pairing_blst = Pairing::new(false, &dst);
+            pairing_blst.raw_aggregate(&aa2, &aa1);
+            pairing_blst.raw_aggregate(&bb2, &bb1);
+            let gt_point = pairing_blst.as_fp12().final_exp();
+
+            blst_fp12_is_one(&gt_point)
+        }
+    }
+
     /// Verify an opening of a polynomial f(X) from any machine
     /// Verify that e(commitment / g^z, g) == e(pi_0, g^{tau_X - alpha}) * e(pi_1, g^{tau_Y - beta})
+    /// commitment / g^z = g^{f(tau_X) - z}
     pub fn verify(
         &self,
         commitment: &FsG1,
@@ -499,22 +581,24 @@ impl PianoBackend {
         z: &FsFr,
         pi_f: &(FsG1, FsG1),
     ) -> bool {
-        let a1 = commitment.sub(&self.piano_settings.g.mul(z));
-        let a2 = self.piano_settings.g2();
-
-        let b11 = pi_f.0;
-        let b12 = self
+        let commitment_minux_z = commitment.sub(&self.piano_settings.g.mul(z));
+        let tau_x_minus_alpha = self
             .piano_settings
             .g2_tau_x()
             .sub(&self.piano_settings.g2().mul(alpha));
-
-        let b21 = pi_f.1;
-        let b22 = self
+        let tau_y_minus_beta = self
             .piano_settings
             .g2_tau_y()
             .sub(&self.piano_settings.g2().mul(beta));
 
-        Self::pairings_verify(&a1, &a2, &b11, &b12, &b21, &b22)
+        Self::pairings_verify(
+            &commitment_minux_z,
+            &self.piano_settings.g2(),
+            &pi_f.0,
+            &tau_x_minus_alpha,
+            &pi_f.1,
+            &tau_y_minus_beta,
+        )
     }
 
     fn pairings_verify(
@@ -543,8 +627,8 @@ impl PianoBackend {
         unsafe {
             blst_p1_cneg(&mut a1neg.0, true);
             blst_p1_to_affine(&mut aa1, &a1neg.0);
-
             blst_p2_to_affine(&mut aa2, &a2.0);
+
             blst_p1_to_affine(&mut bb11, &b11.0);
             blst_p2_to_affine(&mut bb12, &b12.0);
             blst_p1_to_affine(&mut bb21, &b21.0);
@@ -576,7 +660,6 @@ mod tests {
         BivariateFsPolynomial::from_polys(polys)
     }
     use kzg::FFTSettings;
-    use rust_kzg_blst::types::fft_settings::FsFFTSettings;
 
     use super::*;
 
@@ -660,27 +743,12 @@ mod tests {
         // (1 + y)(1 + y) = 1 + 2y + y**2
         let result = BivariateFsPolynomial::from_poly_as_y(&poly_1)
             .mul(&BivariateFsPolynomial::from_poly_as_y(&poly_2));
-        let expected = BivariateFsPolynomial::from_coeffs(vec![
-            vec![FsFr::one(), FsFr::from_u64(2), FsFr::one()],
-        ]);
+        let expected = BivariateFsPolynomial::from_coeffs(vec![vec![
+            FsFr::one(),
+            FsFr::from_u64(2),
+            FsFr::one(),
+        ]]);
         assert_eq!(result.coeffs(), expected.coeffs());
-
-    }
-
-    #[test]
-    #[tracing_test::traced_test]
-    fn test_piano_setup() {
-        let m = 3;
-        let n = 5;
-        let secrets = [[0u8; 32usize], [1u8; 32usize]];
-        let setup = generate_trusted_setup(&PianoFFTSettings::new(n, m).unwrap(), secrets);
-
-        let t = n - m;
-        for i in 0..m {
-            for j in 0..t {
-                println!("U[{}, {}] = {:?}", i, j, setup.u[i][j]);
-            }
-        }
     }
 
     /// Generate random coefficients for the test polynomial in the lagrange basis
@@ -700,26 +768,89 @@ mod tests {
 
     #[test]
     #[tracing_test::traced_test]
-    fn fft_test() {
-        let n = 4;
-        let m = 2;
-        let fft_settings = PianoFFTSettings::new(n, m).unwrap();
+    fn roots_of_unity_test() {
+        fn gcd(mut n: usize, mut m: usize) -> usize {
+            if n == 0 {
+                return m;
+            }
+            if m == 0 {
+                return n;
+            }
+            assert!(n != 0 && m != 0);
+            while m != 0 {
+                if m < n {
+                    std::mem::swap(&mut m, &mut n);
+                }
+                m %= n;
+            }
+            n
+        }
+        const SCALE: usize = 2;
+        const MAX_ORDER: usize = 2usize.pow(SCALE as u32);
+        let fft_settings = PianoFFTSettings::new(SCALE, 0).unwrap();
+        for i in 0..MAX_ORDER {
+            let root = fft_settings.left.get_expanded_roots_of_unity_at(i);
 
-        let data = vec![
-            FsFr::from_u64(1),
-            FsFr::from_u64(2),
-            FsFr::from_u64(3),
-            FsFr::from_u64(4),
-        ];
+            // For n-th root of unity w, w^i has order i / gcd(i, n)
+            let order = MAX_ORDER / gcd(i, MAX_ORDER);
 
-        let result = fft_settings.fft_left(&data, true).unwrap();
-        let inverse = fft_settings.fft_left(&result, false).unwrap();
-        assert_eq!(data, inverse);
-
-        let result = fft_settings.fft_right(&data, true).unwrap();
-        let inverse = fft_settings.fft_right(&result, false).unwrap();
-        assert_eq!(data, inverse);
+            // The n-th root of unity raised to the power of n should be equal to 1
+            assert_eq!(root.pow(order), FsFr::one());
+            
+            // All powers less than order should not be equal to 1
+            for j in 1..order {
+                assert_ne!(root.pow(j), FsFr::one());
+            }
+        }
     }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn lagrange_test() {
+        const SCALE: usize = 2;
+
+        let fft_settings = PianoFFTSettings::new(SCALE, 0).unwrap();
+
+        for i in 0..2usize.pow(SCALE as u32) {
+            tracing::debug!("testing lagrange poly at {}", i);
+
+            // Construct i-th lagrange poly
+            let mut coeffs = vec![FsFr::zero(); 2usize.pow(SCALE as u32)];
+            coeffs[i] = FsFr::one();
+            let lagrange = FsPoly::from_coeffs(&fft_settings.left.fft_fr(&coeffs, true).unwrap());
+
+            // Check that the i-th lagrange poly is correct
+            // L_i(omega^j) = 1 if i == j, 0 otherwise
+            for j in 0..2usize.pow(SCALE as u32) {
+                let root = fft_settings.left.get_expanded_roots_of_unity_at(j);
+                if i == j {
+                    assert_eq!(lagrange.eval(&root), FsFr::one());
+                } else {
+                    assert_eq!(lagrange.eval(&root), FsFr::zero());
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn test_piano_setup() {
+        let m = 3;
+        let n = 5;
+        let secrets = [[0u8; 32usize], [1u8; 32usize]];
+        let fft_settings = PianoFFTSettings::new(n, m).unwrap();
+        let setup = generate_trusted_setup(&fft_settings, secrets);
+
+        let t = n - m;
+        for i in 0..m {
+            for j in 0..t {
+
+
+                println!("U[{}, {}] = {:?}", i, j, setup.u[i][j]);
+            }
+        }
+    }
+
 
     #[test]
     #[tracing_test::traced_test]
@@ -823,19 +954,18 @@ mod tests {
 
         struct Machine {
             id: usize,
-            poly: FsPoly,
             backend: Arc<PianoBackend>,
         }
 
         impl Machine {
-            fn commit(&self) -> Result<FsG1, String> {
+            fn commit(&self, poly: &FsPoly) -> Result<FsG1, String> {
                 tracing::debug!("Machine {} committing", self.id);
-                self.backend.commit(self.id, self.poly.clone())
+                self.backend.commit(self.id, poly)
             }
 
-            fn prove(&self, x: FsFr) -> Result<(FsFr, FsG1), String> {
+            fn prove(&self, poly: &FsPoly, x: &FsFr) -> Result<(FsFr, FsG1), String> {
                 tracing::debug!("Machine {} proving", self.id);
-                self.backend.open(self.id, self.poly.clone(), x)
+                self.backend.open(self.id, poly, x)
             }
         }
 
@@ -868,30 +998,28 @@ mod tests {
         // f(x, y) = sum_{i=0}^{n} sum_{j=0}^{m} f_{i,j} L(j) R(i)
 
         tracing::debug!("Starting machines");
+        let polynomials = (0..M)
+            .map(|i| {
+                let coeffs = lagrange_coeffs[i].clone();
+                FsPoly::from_coeffs(&fft_settings.fft_left(&coeffs, true).unwrap())
+            })
+            .collect::<Vec<_>>();
+
         let machines = (0..M)
             .map(|i| {
                 let backend = backend.clone();
                 tracing::debug!("coeffs size = {}", lagrange_coeffs[i].len());
                 tracing::debug!("coeffs {:?}", lagrange_coeffs[i]);
-                let f_i_coeffs = backend
-                    .fft_settings
-                    .fft_left(&lagrange_coeffs[i], true)
-                    .unwrap();
-                let f_i = FsPoly::from_coeffs(&f_i_coeffs);
 
-                Machine {
-                    id: i,
-                    poly: f_i,
-                    backend,
-                }
+                Machine { id: i, backend }
             })
             .collect::<Vec<_>>();
 
-        tracing::debug!("Committing to the polynomial");
-        // Commit to the polynomial
+        // Commitments
+        tracing::debug!("Committing...");
         let commitments = machines
             .iter()
-            .map(|m| m.commit())
+            .map(|m| m.commit(polynomials.get(m.id).unwrap()))
             .collect::<Result<Vec<_>, _>>()?;
         tracing::debug!("commitments size = {}", commitments.len());
         tracing::debug!("commitments = {:?}", commitments);
@@ -899,16 +1027,23 @@ mod tests {
         let commitment = backend.master_commit(&commitments);
         tracing::debug!("master commitment = {:?}", commitment);
 
-        tracing::debug!("Proving the polynomial");
-        // Open the polynomial at (alpha, beta)
+        // Openings
+        tracing::debug!("Opening...");
         let alpha = FsFr::rand();
         let beta = FsFr::rand();
 
         let proofs = machines
             .iter()
-            .map(|m| m.prove(alpha))
+            .map(|m| m.prove(polynomials.get(m.id).unwrap(), &alpha))
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
+
+        // Check the intermediate proofs
+        for (i, (y, pi_0)) in proofs.iter().enumerate() {
+            let commitment = commitments[i];
+            tracing::debug!("Checking proof for machine {}", i);
+            assert!(backend.verify_single(i, &commitment, &alpha, y, pi_0));
+        }
 
         let evals = proofs
             .iter()
@@ -932,7 +1067,8 @@ mod tests {
 
         tracing::debug!("pi_f = {:?}", pi_f);
 
-        // Verify the opening
+        // Verification
+        tracing::debug!("Verifying...");
         let result = backend.verify(&commitment, &beta, &alpha, &z, &pi_f);
         if result {
             Ok(())
