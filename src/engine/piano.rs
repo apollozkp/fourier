@@ -151,13 +151,13 @@ impl BivariateFsPolynomial {
 #[derive(Debug)]
 pub struct PianoSettings {
     g: FsG1,
-    g_tau_x: FsG1,
-    g_tau_y: FsG1,
+    g_tau_x: Vec<FsG1>,
+    g_tau_y: Vec<FsG1>,
     u: Vec<Vec<FsG1>>,
 
     g2: FsG2,
-    g2_tau_x: FsG2,
-    g2_tau_y: FsG2,
+    g2_tau_x: Vec<FsG2>,
+    g2_tau_y: Vec<FsG2>,
 }
 
 impl PianoSettings {
@@ -167,18 +167,12 @@ impl PianoSettings {
 
     /// Get g^{tau_X^i}
     pub fn g_tau_x(&self, i: usize) -> FsG1 {
-        if i == 0 {
-            return self.g();
-        }
-        (0..i).fold(self.g_tau_x, |acc, _| acc.add(&self.g_tau_x))
+        self.g_tau_x[i]
     }
 
     /// Get g^{tau_Y^i}
     pub fn g_tau_y(&self, i: usize) -> FsG1 {
-        if i == 0 {
-            return self.g();
-        }
-        (0..i).fold(self.g_tau_y, |acc, _| acc.add(&self.g_tau_y))
+        self.g_tau_y[i]
     }
 
     // TODO: out of bounds check
@@ -191,13 +185,14 @@ impl PianoSettings {
     }
 
     pub fn g2_tau_x(&self) -> FsG2 {
-        self.g2_tau_x
+        self.g2_tau_x[1]
     }
 
     pub fn g2_tau_y(&self) -> FsG2 {
-        self.g2_tau_y
+        self.g2_tau_y[1]
     }
 }
+
 
 pub fn generate_trusted_setup(
     fft_settings: &PianoFFTSettings,
@@ -213,8 +208,16 @@ pub fn generate_trusted_setup(
     let sub_circuit_size = 2usize.pow(fft_settings.t() as u32);
     let machine_count = 2usize.pow(fft_settings.m() as u32);
 
-    let g_tau_x = g.mul(&tau_x);
-    let g_tau_y = g.mul(&tau_y);
+    let g_tau_x = (0..sub_circuit_size).fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
+        acc.push(g.mul(&pow));
+        pow = pow.mul(&tau_x);
+        (acc, pow)
+    }).0;
+    let g_tau_y = (0..machine_count).fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
+        acc.push(g.mul(&pow));
+        pow = pow.mul(&tau_y);
+        (acc, pow)
+    }).0;
 
     let u = (0..machine_count)
         .map(|i| {
@@ -233,8 +236,16 @@ pub fn generate_trusted_setup(
     // G2
     let g2 = rust_kzg_blst::consts::G2_GENERATOR;
 
-    let g2_tau_x = g2.mul(&tau_x);
-    let g2_tau_y = g2.mul(&tau_y);
+    let g2_tau_x = (0..sub_circuit_size).fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
+        acc.push(g2.mul(&pow));
+        pow = pow.mul(&tau_x);
+        (acc, pow)
+    }).0;
+    let g2_tau_y = (0..machine_count).fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
+        acc.push(g2.mul(&pow));
+        pow = pow.mul(&tau_y);
+        (acc, pow)
+    }).0;
 
     PianoSettings {
         g,
@@ -402,7 +413,6 @@ impl PianoBackend {
     /// So we are actually just opening f'(X) = R_i(tau_Y) * f_i(X)
     /// But we do return f_i(alpha)
     pub fn open(&self, i: usize, poly: &FsPoly, alpha: &FsFr) -> Result<(FsFr, FsG1), String> {
-        tracing::debug!("poly coeffs len = {}", poly.coeffs.len());
         // Evaluate the polynomial at alpha
         let y = poly.eval(alpha);
 
@@ -681,9 +691,24 @@ mod tests {
     }
     use kzg::FFTSettings;
 
-    use crate::engine::blst::BlstBackend;
-
     use super::*;
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn stupid_test() {
+        let tau = FsFr::rand();
+        let g = rust_kzg_blst::consts::G1_GENERATOR;
+        let g_tau = g.mul(&tau);
+        let g_tau_i= |i:usize| {
+            if i == 0 {
+                return g;
+            }
+            (0..i).fold(FsG1::default(), |acc, _| acc.add(&g_tau))
+        };
+
+        assert_eq!(g_tau_i(0), g);
+        assert_eq!(g_tau_i(1), g_tau);
+    }
 
     #[test]
     #[tracing_test::traced_test]
@@ -1060,7 +1085,7 @@ mod tests {
     fn test_kzg_proof_linearity() {
         use crate::engine::backend::Backend;
         use crate::engine::blst::BlstBackend;
-        const SCALE: usize = 2;
+        const SCALE: usize = 5;
         let cfg = crate::engine::config::BackendConfig::new(None, None, SCALE, None, None);
         let backend = BlstBackend::new(Some(cfg));
 
@@ -1161,16 +1186,17 @@ mod tests {
         //
         // Each machine i produces a proof pi_0^{(i)} and an evauluation y^{(i)} = f_i(alpha)
         // We should be able to verify that proof using the KZG verification scheme
-        for (i, (y, pi_0)) in proofs.iter().enumerate() {
+        (0..machines_count).for_each(|i| {
             let commitment = commitments[i];
+            let (y, pi_0) = proofs[i];
             tracing::debug!("Checking proof for machine {}", i);
-            let verify = backend.verify_single(i, &commitment, &alpha, y, pi_0);
+            let verify = backend.verify_single(i, &commitment, &alpha, &y, &pi_0);
             if !verify {
                 tracing::error!("Verification failed for machine {}", i);
             } else {
                 tracing::debug!("Verification OK for machine {}", i);
             }
-        }
+        });
 
         // Compute Master Commitment
         let master_commitment = backend.master_commit(&commitments);
