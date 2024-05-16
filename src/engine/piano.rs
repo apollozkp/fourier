@@ -193,7 +193,6 @@ impl PianoSettings {
     }
 }
 
-
 pub fn generate_trusted_setup(
     fft_settings: &PianoFFTSettings,
     secrets: [[u8; 32usize]; 2],
@@ -208,16 +207,20 @@ pub fn generate_trusted_setup(
     let sub_circuit_size = 2usize.pow(fft_settings.t() as u32);
     let machine_count = 2usize.pow(fft_settings.m() as u32);
 
-    let g_tau_x = (0..sub_circuit_size).fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
-        acc.push(g.mul(&pow));
-        pow = pow.mul(&tau_x);
-        (acc, pow)
-    }).0;
-    let g_tau_y = (0..machine_count).fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
-        acc.push(g.mul(&pow));
-        pow = pow.mul(&tau_y);
-        (acc, pow)
-    }).0;
+    let g_tau_x = (0..sub_circuit_size)
+        .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
+            acc.push(g.mul(&pow));
+            pow = pow.mul(&tau_x);
+            (acc, pow)
+        })
+        .0;
+    let g_tau_y = (0..machine_count)
+        .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
+            acc.push(g.mul(&pow));
+            pow = pow.mul(&tau_y);
+            (acc, pow)
+        })
+        .0;
 
     let u = (0..machine_count)
         .map(|i| {
@@ -236,16 +239,20 @@ pub fn generate_trusted_setup(
     // G2
     let g2 = rust_kzg_blst::consts::G2_GENERATOR;
 
-    let g2_tau_x = (0..sub_circuit_size).fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
-        acc.push(g2.mul(&pow));
-        pow = pow.mul(&tau_x);
-        (acc, pow)
-    }).0;
-    let g2_tau_y = (0..machine_count).fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
-        acc.push(g2.mul(&pow));
-        pow = pow.mul(&tau_y);
-        (acc, pow)
-    }).0;
+    let g2_tau_x = (0..sub_circuit_size)
+        .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
+            acc.push(g2.mul(&pow));
+            pow = pow.mul(&tau_x);
+            (acc, pow)
+        })
+        .0;
+    let g2_tau_y = (0..machine_count)
+        .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
+            acc.push(g2.mul(&pow));
+            pow = pow.mul(&tau_y);
+            (acc, pow)
+        })
+        .0;
 
     PianoSettings {
         g,
@@ -699,7 +706,7 @@ mod tests {
         let tau = FsFr::rand();
         let g = rust_kzg_blst::consts::G1_GENERATOR;
         let g_tau = g.mul(&tau);
-        let g_tau_i= |i:usize| {
+        let g_tau_i = |i: usize| {
             if i == 0 {
                 return g;
             }
@@ -1119,121 +1126,119 @@ mod tests {
         tracing::debug!("scaled verification OK");
     }
 
-    /// Demonstrate the Pianist protocol
-    /// N = 2^n circuit size
-    /// M = 2^m number of machines
-    /// T = M / N
-    /// t = n - m
-    fn pianist(n: usize, m: usize) -> Result<(), String> {
-        // Basic variables
-        let t = n - m;
-        let machines_count = 2usize.pow(m as u32);
-        let sub_circuit_size = 2usize.pow(t as u32);
-
-        tracing::debug!(
-            "Piano setup: circuit size = {}, machines = {}",
-            2usize.pow(n as u32),
-            2usize.pow(m as u32)
-        );
-
-        // Start one backend
-        let backend = PianoBackend::new(n, m, &[[0u8; 32usize], [1u8; 32usize]]);
-
-        // Generate the polynomial we'll be working with in the standard basis
-        // f(x, y) = sum_{i=0}^{n} sum_{j=0}^{m} f_{i,j} L(j) R(i)
-        let lagrange_coeffs = generate_coeffs(n, m);
-        tracing::debug!("Lagrange coeffs size = {}", lagrange_coeffs.len());
-        let mut f = BivariateFsPolynomial::zero();
-        (0..machines_count).for_each(|i| {
-            (0..sub_circuit_size).for_each(|j| {
-                let left = backend.fft_settings.left_lagrange_poly(j).unwrap();
-                let right = backend.fft_settings.right_lagrange_poly(i).unwrap();
-                let mut term = BivariateFsPolynomial::from_poly_as_x(&left)
-                    .mul(&BivariateFsPolynomial::from_poly_as_y(&right));
-                term = term.scale(&lagrange_coeffs[i][j]);
-                f = f.add(&term);
-            });
-        });
-
-        // Compute sub-polynomials in standard basis
-        let polynomials = (0..machines_count)
-            .map(|i| {
-                let coeffs = lagrange_coeffs[i].clone();
-                FsPoly::from_coeffs(&backend.fft_settings.fft_left(&coeffs, true).unwrap())
-            })
-            .collect::<Vec<_>>();
-
-        // WORKER NODES
-        // Commitments
-        tracing::debug!("Committing...");
-        let commitments = (0..machines_count)
-            .map(|i| backend.commit(i, &polynomials[i]).unwrap())
-            .collect::<Vec<_>>();
-
-        // Openings
-        tracing::debug!("Opening...");
-        let alpha = FsFr::rand();
-        let beta = FsFr::rand();
-        let proofs = (0..machines_count)
-            .map(|i| backend.open(i, &polynomials[i], &alpha).unwrap())
-            .collect::<Vec<_>>();
-
-        // MASTER NODE
-        // Verify each individual commitment and opening before proceeding
-        // TODO: This does not work yet
-        // NOTE: this is not part of the Pianist paper
-        // Check the intermediate proofs
-        //
-        // Each machine i produces a proof pi_0^{(i)} and an evauluation y^{(i)} = f_i(alpha)
-        // We should be able to verify that proof using the KZG verification scheme
-        (0..machines_count).for_each(|i| {
-            let commitment = commitments[i];
-            let (y, pi_0) = proofs[i];
-            tracing::debug!("Checking proof for machine {}", i);
-            let verify = backend.verify_single(i, &commitment, &alpha, &y, &pi_0);
-            if !verify {
-                tracing::error!("Verification failed for machine {}", i);
-            } else {
-                tracing::debug!("Verification OK for machine {}", i);
-            }
-        });
-
-        // Compute Master Commitment
-        let master_commitment = backend.master_commit(&commitments);
-
-        // Compute Master Opening
-        let (evals, proofs) = proofs.iter().fold(
-            (Vec::new(), Vec::new()),
-            |(mut evals, mut proofs), (y, pi)| {
-                evals.push(*y);
-                proofs.push(*pi);
-                (evals, proofs)
-            },
-        );
-
-        let (z, pi_f) = backend.master_open(&evals, &proofs, &beta)?;
-
-        // NOTE: We check the reconstruction here as a sanity check
-        // Check z manually, z = f(alpha, beta)
-        let z_manual = f.eval(&alpha, &beta);
-        assert_eq!(z, z_manual);
-        tracing::debug!("Reconstruction OK!");
-
-        // Master Verification
-        tracing::debug!("Verifying...");
-        let result = backend.verify(&master_commitment, &beta, &alpha, &z, &pi_f);
-        if result {
-            Ok(())
-        } else {
-            Err("Verification failed".to_string())
-        }
-    }
-
     #[test]
     #[tracing_test::traced_test]
     // TODO: this only works for M = 1
     fn pianist_test() {
-        let result = pianist(5, 2);
-        assert!(result.is_ok());
+        for n in 2..8 {
+            for m in 1..n - 1 {
+                tracing::debug!("Running pianist test for n = {}, m = {}", n, m);
+                let result = pianist(n, m);
+                assert!(result.is_ok());
+            }
+        }
+        /// Demonstrates the Pianist protocol
+        /// N = 2^n circuit size
+        /// M = 2^m number of machines
+        /// T = M / N
+        /// t = n - m
+        fn pianist(n: usize, m: usize) -> Result<(), String> {
+            // Basic variables
+            let t = n - m;
+            let machines_count = 2usize.pow(m as u32);
+            let sub_circuit_size = 2usize.pow(t as u32);
+
+            tracing::debug!(
+                "Piano setup: circuit size = {}, machines = {}",
+                2usize.pow(n as u32),
+                2usize.pow(m as u32)
+            );
+
+            // Start one backend
+            let backend = PianoBackend::new(n, m, &[[0u8; 32usize], [1u8; 32usize]]);
+
+            // Generate the polynomial we'll be working with in the standard basis
+            // f(x, y) = sum_{i=0}^{n} sum_{j=0}^{m} f_{i,j} L(j) R(i)
+            let lagrange_coeffs = generate_coeffs(n, m);
+            tracing::debug!("Lagrange coeffs size = {}", lagrange_coeffs.len());
+            let mut f = BivariateFsPolynomial::zero();
+            (0..machines_count).for_each(|i| {
+                (0..sub_circuit_size).for_each(|j| {
+                    let left = backend.fft_settings.left_lagrange_poly(j).unwrap();
+                    let right = backend.fft_settings.right_lagrange_poly(i).unwrap();
+                    let mut term = BivariateFsPolynomial::from_poly_as_x(&left)
+                        .mul(&BivariateFsPolynomial::from_poly_as_y(&right));
+                    term = term.scale(&lagrange_coeffs[i][j]);
+                    f = f.add(&term);
+                });
+            });
+
+            // Compute sub-polynomials in standard basis
+            let polynomials = (0..machines_count)
+                .map(|i| {
+                    let coeffs = lagrange_coeffs[i].clone();
+                    FsPoly::from_coeffs(&backend.fft_settings.fft_left(&coeffs, true).unwrap())
+                })
+                .collect::<Vec<_>>();
+
+            // WORKER NODES
+            // Commitments
+            tracing::debug!("Committing...");
+            let commitments = (0..machines_count)
+                .map(|i| backend.commit(i, &polynomials[i]).unwrap())
+                .collect::<Vec<_>>();
+
+            // Openings
+            tracing::debug!("Opening...");
+            let alpha = FsFr::rand();
+            let beta = FsFr::rand();
+            let proofs = (0..machines_count)
+                .map(|i| backend.open(i, &polynomials[i], &alpha).unwrap())
+                .collect::<Vec<_>>();
+
+            // MASTER NODE
+            // Verify each individual commitment and opening before proceeding
+            (0..machines_count).for_each(|i| {
+                let commitment = commitments[i];
+                let (y, pi_0) = proofs[i];
+                tracing::debug!("Checking proof for machine {}", i);
+                let verify = backend.verify_single(i, &commitment, &alpha, &y, &pi_0);
+                if !verify {
+                    tracing::error!("Verification failed for machine {}", i);
+                } else {
+                    tracing::debug!("Verification OK for machine {}", i);
+                }
+            });
+
+            // Compute Master Commitment
+            let master_commitment = backend.master_commit(&commitments);
+
+            // Compute Master Opening
+            let (evals, proofs) = proofs.iter().fold(
+                (Vec::new(), Vec::new()),
+                |(mut evals, mut proofs), (y, pi)| {
+                    evals.push(*y);
+                    proofs.push(*pi);
+                    (evals, proofs)
+                },
+            );
+
+            let (z, pi_f) = backend.master_open(&evals, &proofs, &beta)?;
+
+            // NOTE: We check the reconstruction here as a sanity check
+            // Check z manually, z = f(alpha, beta)
+            let z_manual = f.eval(&alpha, &beta);
+            assert_eq!(z, z_manual);
+            tracing::debug!("Reconstruction OK!");
+
+            // Master Verification
+            tracing::debug!("Verifying...");
+            let result = backend.verify(&master_commitment, &beta, &alpha, &z, &pi_f);
+            if result {
+                Ok(())
+            } else {
+                Err("Verification failed".to_string())
+            }
+        }
     }
 }
