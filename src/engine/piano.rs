@@ -13,141 +13,6 @@ use rust_kzg_blst::types::g1::FsG1;
 use rust_kzg_blst::types::g2::FsG2;
 use rust_kzg_blst::types::poly::FsPoly;
 
-fn polysum(poly: &mut FsPoly, other: &FsPoly) {
-    if poly.len() < other.len() {
-        poly.coeffs.resize(other.len(), FsFr::zero());
-    }
-    other.coeffs.iter().enumerate().for_each(|(i, c)| {
-        poly.coeffs[i] = poly.coeffs[i].add(c);
-    });
-}
-
-fn polymul_and_sum(poly: &mut FsPoly, other: &FsPoly, x: &FsFr) {
-    let mut result = other.clone();
-    result.coeffs.iter_mut().for_each(|c| *c = c.mul(x));
-    polysum(poly, &result);
-}
-
-fn polyeval(poly: &FsPoly, x: &FsFr) -> FsFr {
-    if poly.len() == 0 {
-        return FsFr::zero();
-    }
-    if poly.len() == 1 {
-        return poly.coeffs[0];
-    }
-    poly.eval(x)
-}
-
-/// A bivariate polynomial in the form:
-/// f(x, y) = sum_{i=0}^{n} x^i sum_{j=0}^{m} a_{i,j} y^j
-/// where a_{i,j} are the coefficients of the polynomial.
-/// The coefficients are stored in a 2D vector, where the first index is the
-/// power of x and the second index is the power of y.
-#[derive(Debug)]
-pub struct BivariateFsPolynomial {
-    parts: Vec<FsPoly>,
-}
-
-impl BivariateFsPolynomial {
-    pub fn eval(&self, x: &FsFr, y: &FsFr) -> FsFr {
-        polyeval(&self.eval_x(x), y)
-    }
-
-    pub fn eval_x(&self, x: &FsFr) -> FsPoly {
-        let max_degree = self.parts.iter().map(|p| p.len()).max().unwrap();
-        let mut result = FsPoly::from_coeffs(&vec![FsFr::zero(); max_degree]);
-        let mut pow = FsFr::one();
-        for f in self.parts.iter() {
-            polymul_and_sum(&mut result, f, &pow);
-            pow = pow.mul(x);
-        }
-        result
-    }
-
-    pub fn eval_y(&self, y: &FsFr) -> FsPoly {
-        FsPoly::from_coeffs(&self.parts.iter().map(|f| f.eval(y)).collect::<Vec<FsFr>>())
-    }
-
-    pub fn from_poly_as_x(poly: &FsPoly) -> BivariateFsPolynomial {
-        BivariateFsPolynomial::from_coeffs(poly.coeffs.iter().map(|c| vec![*c]).collect())
-    }
-
-    pub fn from_poly_as_y(poly: &FsPoly) -> BivariateFsPolynomial {
-        BivariateFsPolynomial::from_polys(vec![poly.clone()])
-    }
-
-    pub fn from_coeffs(coeffs: Vec<Vec<FsFr>>) -> BivariateFsPolynomial {
-        BivariateFsPolynomial {
-            parts: coeffs.iter().map(|c| FsPoly::from_coeffs(c)).collect(),
-        }
-    }
-
-    pub fn from_polys(polys: Vec<FsPoly>) -> BivariateFsPolynomial {
-        BivariateFsPolynomial { parts: polys }
-    }
-
-    pub fn mul(&self, other: &BivariateFsPolynomial) -> BivariateFsPolynomial {
-        let mut result =
-            vec![FsPoly::from_coeffs(&[FsFr::zero()]); self.parts.len() + other.parts.len() - 1];
-        for (i, f) in self.parts.iter().enumerate() {
-            for (j, g) in other.parts.iter().enumerate() {
-                let mut h = f.clone();
-                let degree = h.len() + g.len() - 1;
-                h = h.mul(g, degree).unwrap();
-                polysum(&mut result[i + j], &h);
-            }
-        }
-        BivariateFsPolynomial::from_coeffs(result.iter().map(|p| p.coeffs.clone()).collect())
-    }
-
-    pub fn add(&self, other: &BivariateFsPolynomial) -> BivariateFsPolynomial {
-        let size = self.parts.len().max(other.parts.len());
-        let mut result = vec![FsPoly::from_coeffs(&[FsFr::zero()]); size];
-        for (i, f) in self.parts.iter().enumerate() {
-            polysum(&mut result[i], f);
-        }
-        for (i, f) in other.parts.iter().enumerate() {
-            polysum(&mut result[i], f);
-        }
-        BivariateFsPolynomial::from_coeffs(result.iter().map(|p| p.coeffs.clone()).collect())
-    }
-
-    pub fn coeffs(&self) -> Vec<Vec<FsFr>> {
-        self.parts.iter().map(|p| p.coeffs.clone()).collect()
-    }
-
-    pub fn scale(&self, scalar: &FsFr) -> BivariateFsPolynomial {
-        BivariateFsPolynomial::from_coeffs(
-            self.parts
-                .iter()
-                .map(|p| {
-                    let coeffs = p.coeffs.iter().map(|c| c.mul(scalar)).collect();
-                    coeffs
-                })
-                .collect(),
-        )
-    }
-
-    pub fn zero() -> BivariateFsPolynomial {
-        BivariateFsPolynomial::from_coeffs(vec![vec![FsFr::zero()]])
-    }
-}
-
-// Suppose we have M = 2**m machines and circuit size N = 2**n
-// Let M * T = N, and t = n - m
-// Let omega_X be an T-th root of unity
-// Let omega_Y be an M-th root of unity
-// Let L_j(x) = (omega_X^j / T) * (X^T - 1) / (X - omega_X^j) (Lagrange poly)
-// Let R_i(y) = (omega_Y^i / M) * (Y^M - 1) / (Y - omega_Y^i) (Lagrange poly)
-// Let g be a generator of G1
-//
-// We need to generate the following:
-// 2. two secret field elements tau_X, tau_Y
-// 3. g^{tau_X}
-// 4. g^{tau_Y}
-// 5. U_{i, j} = g^{R_i(tau_Y) * L_j(tau_X)}
-// Then we forget tau_X, tau_Y
-
 #[derive(Debug)]
 pub struct PianoSettings {
     g: FsG1,
@@ -156,8 +21,8 @@ pub struct PianoSettings {
     u: Vec<Vec<FsG1>>,
 
     g2: FsG2,
-    g2_tau_x: Vec<FsG2>,
-    g2_tau_y: Vec<FsG2>,
+    g2_tau_x: FsG2,
+    g2_tau_y: FsG2,
 }
 
 impl PianoSettings {
@@ -175,7 +40,6 @@ impl PianoSettings {
         self.g_tau_y[i]
     }
 
-    // TODO: out of bounds check
     pub fn u(&self, i: usize, j: usize) -> FsG1 {
         self.u[i][j]
     }
@@ -185,14 +49,214 @@ impl PianoSettings {
     }
 
     pub fn g2_tau_x(&self) -> FsG2 {
-        self.g2_tau_x[1]
+        self.g2_tau_x
     }
 
     pub fn g2_tau_y(&self) -> FsG2 {
-        self.g2_tau_y[1]
+        self.g2_tau_y
+    }
+
+    pub fn save_setup_to_file(&self, file_path: &str, compressed: bool) -> Result<(), String> {
+        fn write_g1(file: &mut std::fs::File, el: &FsG1, compressed: bool) -> Result<(), String> {
+            if compressed {
+                let bytes = el.to_bytes();
+                std::io::Write::write(file, &bytes).map_err(|e| e.to_string())?;
+            } else {
+                let bytes = el.serialize();
+                std::io::Write::write(file, &bytes).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        }
+        fn write_g2(file: &mut std::fs::File, el: &FsG2, compressed: bool) -> Result<(), String> {
+            if compressed {
+                let bytes = el.to_bytes();
+                std::io::Write::write(file, &bytes).map_err(|e| e.to_string())?;
+            } else {
+                let bytes = el.serialize();
+                std::io::Write::write(file, &bytes).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        }
+        let mut file = std::fs::File::create(file_path).unwrap();
+
+        // Write the G1 generator
+        write_g1(&mut file, &self.g, compressed)?;
+
+        // Write the g^{tau_X}^i
+        let encoded_g_tau_x_size = self.g_tau_x.len() as u64;
+        std::io::Write::write(&mut file, &encoded_g_tau_x_size.to_le_bytes()).unwrap();
+        for el in self.g_tau_x.iter() {
+            write_g1(&mut file, el, compressed)?;
+        }
+
+        // Write the g^{tau_Y}^i
+        let encoded_g_tau_y_size = self.g_tau_y.len() as u64;
+        std::io::Write::write(&mut file, &encoded_g_tau_y_size.to_le_bytes()).unwrap();
+        for el in self.g_tau_y.iter() {
+            write_g1(&mut file, el, compressed)?;
+        }
+
+        // Write the U_{i, j}
+        let encoded_u_rows_size = self.u.len() as u64;
+        let encoded_u_cols_size = self.u[0].len() as u64;
+        std::io::Write::write(&mut file, &encoded_u_rows_size.to_le_bytes()).unwrap();
+        std::io::Write::write(&mut file, &encoded_u_cols_size.to_le_bytes()).unwrap();
+        for row in self.u.iter() {
+            for el in row.iter() {
+                write_g1(&mut file, el, compressed)?;
+            }
+        }
+
+        // Write the G2 generator, g2^{tau_X}, g2^{tau_Y}
+        write_g2(&mut file, &self.g2, compressed)?;
+        write_g2(&mut file, &self.g2_tau_x, compressed)?;
+        write_g2(&mut file, &self.g2_tau_y, compressed)?;
+
+        Ok(())
+    }
+
+    pub fn load_setup_from_file(
+        file_path: &str,
+        compressed: bool,
+    ) -> Result<PianoSettings, String> {
+        use std::io::Read;
+        use std::sync::Arc;
+        fn load_g1(
+            reader: &mut std::io::BufReader<std::fs::File>,
+            compressed: bool,
+        ) -> Result<FsG1, String> {
+            if compressed {
+                let mut bytes = [0u8; 48];
+                reader.read_exact(&mut bytes).unwrap();
+                FsG1::from_bytes(&bytes).map_err(|e| e.to_string())
+            } else {
+                let mut bytes = [0u8; 96];
+                reader.read_exact(&mut bytes).unwrap();
+                FsG1::deserialize(&bytes).map_err(|e| e.to_string())
+            }
+        }
+
+        fn load_g2(
+            reader: &mut std::io::BufReader<std::fs::File>,
+            compressed: bool,
+        ) -> Result<FsG2, String> {
+            if compressed {
+                let mut bytes = [0u8; 96];
+                reader.read_exact(&mut bytes).unwrap();
+                FsG2::from_bytes(&bytes).map_err(|e| e.to_string())
+            } else {
+                let mut bytes = [0u8; 192];
+                reader.read_exact(&mut bytes).unwrap();
+                FsG2::deserialize(&bytes).map_err(|e| e.to_string())
+            }
+        }
+
+        fn load_g1_array(
+            reader: &mut std::io::BufReader<std::fs::File>,
+            compressed: bool,
+        ) -> Result<Vec<FsG1>, String> {
+            const COMPRESSED_SIZE: usize = 48;
+            const UNCOMPRESSED_SIZE: usize = 96;
+            let mut array_size_bytes = [0u8; 8];
+            reader.read_exact(&mut array_size_bytes).unwrap();
+            let array_size = u64::from_le_bytes(array_size_bytes) as usize;
+
+            if compressed {
+                fn g1_handler(bytes: &[u8; COMPRESSED_SIZE]) -> FsG1 {
+                    FsG1::from_bytes(bytes).expect("failed to deserialize G1 element")
+                }
+
+                kzg::io_utils::batch_reader::<COMPRESSED_SIZE, FsG1>(
+                    reader,
+                    array_size,
+                    Arc::new(g1_handler),
+                    None,
+                )
+            } else {
+                fn g1_handler(bytes: &[u8; UNCOMPRESSED_SIZE]) -> FsG1 {
+                    FsG1::deserialize(bytes).expect("failed to deserialize G1 element")
+                }
+
+                kzg::io_utils::batch_reader::<UNCOMPRESSED_SIZE, FsG1>(
+                    reader,
+                    array_size,
+                    Arc::new(g1_handler),
+                    None,
+                )
+            }
+        }
+
+        fn load_g1_matrix(
+            reader: &mut std::io::BufReader<std::fs::File>,
+            compressed: bool,
+        ) -> Result<Vec<Vec<FsG1>>, String> {
+            const COMPRESSED_SIZE: usize = 48;
+            const UNCOMPRESSED_SIZE: usize = 96;
+            let mut rows_bytes = [0u8; 8];
+            reader.read_exact(&mut rows_bytes).unwrap();
+            let rows = u64::from_le_bytes(rows_bytes) as usize;
+
+            let mut cols_bytes = [0u8; 8];
+            reader.read_exact(&mut cols_bytes).unwrap();
+            let cols = u64::from_le_bytes(cols_bytes) as usize;
+
+            if compressed {
+                fn g1_handler(bytes: &[u8; COMPRESSED_SIZE]) -> FsG1 {
+                    FsG1::from_bytes(bytes).expect("failed to deserialize G1 element")
+                }
+
+                kzg::io_utils::batch_reader::<COMPRESSED_SIZE, FsG1>(
+                    reader,
+                    rows * cols,
+                    Arc::new(g1_handler),
+                    None,
+                )
+                .map(|v| v.chunks(cols).map(|c| c.to_vec()).collect())
+            } else {
+                fn g1_handler(bytes: &[u8; UNCOMPRESSED_SIZE]) -> FsG1 {
+                    FsG1::deserialize(bytes).expect("failed to deserialize G1 element")
+                }
+
+                kzg::io_utils::batch_reader::<UNCOMPRESSED_SIZE, FsG1>(
+                    reader,
+                    rows * cols,
+                    Arc::new(g1_handler),
+                    None,
+                )
+                .map(|v| v.chunks(cols).map(|c| c.to_vec()).collect())
+            }
+        }
+
+        let file = std::fs::File::open(file_path).unwrap();
+        let mut reader = std::io::BufReader::new(file);
+        let (g, g_tau_x, g_tau_y, u, g2, g2_tau_x, g2_tau_y) = (
+            load_g1(&mut reader, compressed)?,
+            load_g1_array(&mut reader, compressed)?,
+            load_g1_array(&mut reader, compressed)?,
+            load_g1_matrix(&mut reader, compressed)?,
+            load_g2(&mut reader, compressed)?,
+            load_g2(&mut reader, compressed)?,
+            load_g2(&mut reader, compressed)?,
+        );
+
+        Ok(PianoSettings {
+            g,
+            g_tau_x,
+            g_tau_y,
+            u,
+            g2,
+            g2_tau_x,
+            g2_tau_y,
+        })
     }
 }
 
+/// We need to generate the following:
+/// 2. two secret field elements tau_X, tau_Y
+/// 3. g^{tau_X}
+/// 4. g^{tau_Y}
+/// 5. U_{i, j} = g^{R_i(tau_Y) * L_j(tau_X)}
+/// Then we forget tau_X, tau_Y
 pub fn generate_trusted_setup(
     fft_settings: &PianoFFTSettings,
     secrets: [[u8; 32usize]; 2],
@@ -239,20 +303,8 @@ pub fn generate_trusted_setup(
     // G2
     let g2 = rust_kzg_blst::consts::G2_GENERATOR;
 
-    let g2_tau_x = (0..sub_circuit_size)
-        .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
-            acc.push(g2.mul(&pow));
-            pow = pow.mul(&tau_x);
-            (acc, pow)
-        })
-        .0;
-    let g2_tau_y = (0..machine_count)
-        .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
-            acc.push(g2.mul(&pow));
-            pow = pow.mul(&tau_y);
-            (acc, pow)
-        })
-        .0;
+    let g2_tau_x = g2.mul(&tau_x);
+    let g2_tau_y = g2.mul(&tau_y);
 
     PianoSettings {
         g,
@@ -685,6 +737,7 @@ impl PianoBackend {
 
 #[cfg(test)]
 mod tests {
+    use crate::bipoly::BivariateFsPolynomial;
     // Polynomial for testing:
     // 1 + xy + x**2 + y**2
     // = (1 + y**2) + x(y) + x**2(1)
@@ -941,7 +994,6 @@ mod tests {
     fn manual_commit_test() {
         const N: usize = 8;
         const MACHINES: usize = 4;
-        const T: usize = N - MACHINES;
         const M: usize = MACHINES;
 
         let coeffs = generate_coeffs(N, M);
@@ -1241,5 +1293,31 @@ mod tests {
                 Err("Verification failed".to_string())
             }
         }
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn test_save_and_load_setup() {
+        const FILENAME: &str = "piano_setup.json";
+        fn assert_eq(a: &PianoSettings, b: &PianoSettings) {
+            assert_eq!(a.g(), b.g());
+            assert_eq!(a.g2(), b.g2());
+            assert_eq!(a.g_tau_x, b.g_tau_x);
+            assert_eq!(a.g_tau_y, b.g_tau_y);
+            assert_eq!(a.g2_tau_x, b.g2_tau_x);
+            assert_eq!(a.g2_tau_y, b.g2_tau_y);
+            assert_eq!(a.u, b.u);
+        }
+        fn test_save_load(backend: &PianoBackend, compressed: bool) {
+            assert!(backend.piano_settings.save_setup_to_file(FILENAME, compressed).is_ok());
+            let loaded = PianoSettings::load_setup_from_file(FILENAME, compressed).unwrap();
+            assert_eq(&backend.piano_settings, &loaded);
+        }
+        let backend = PianoBackend::new(4, 2, &[[0u8; 32usize], [1u8; 32usize]]);
+        
+        test_save_load(&backend, true);
+        test_save_load(&backend, false);
+
+        std::fs::remove_file(FILENAME).unwrap();
     }
 }
