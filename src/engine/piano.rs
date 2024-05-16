@@ -1137,6 +1137,7 @@ mod tests {
                 assert!(result.is_ok());
             }
         }
+
         /// Demonstrates the Pianist protocol
         /// N = 2^n circuit size
         /// M = 2^m number of machines
