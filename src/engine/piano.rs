@@ -19,544 +19,55 @@ use rust_kzg_blst::types::poly::FsPoly;
 use std::io::Write;
 use std::sync::Arc;
 
-type OptionalPrecomputationTable = Option<Arc<PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>>>;
+use super::config::DistributedBackendConfig;
+use super::config::DistributedSetupConfig;
 
-#[derive(Debug, Default)]
-pub struct PianoPrecomputation {
-    pub g1_tau_y: OptionalPrecomputationTable,
-
-    pub u: Vec<OptionalPrecomputationTable>,
-}
-
-impl PianoPrecomputation {
-    pub fn generate(settings: &PianoSettings) -> Result<Self, String> {
-        let g1_tau_y = precompute(&settings.g_tau_y).ok().flatten().map(Arc::new);
-        let mut u = vec![None; settings.u.len()];
-        for (i, row) in settings.u.iter().enumerate() {
-            u[i] = precompute(row).ok().flatten().map(Arc::new);
-        }
-        Ok(PianoPrecomputation { g1_tau_y, u })
-    }
-
-    pub fn get_g1_tau_y(&self) -> Option<&PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>> {
-        self.g1_tau_y.as_ref().map(|v| v.as_ref())
-    }
-
-    pub fn get_u(&self, i: usize) -> Option<&PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>> {
-        self.u[i].as_ref().map(|v| v.as_ref())
-    }
-
-    /// Load precomputation tables from a file
-    /// The file format is:
-    /// - g1_tau_y
-    /// - size of u
-    /// - u_0
-    /// - u_1
-    /// - ...
-    /// - u_n
-    /// where each u_i is a precomputation table
-    pub fn load_from_file(file_path: &str, compressed: bool) -> Result<Self, String> {
-        use std::io::Read;
-
-        let file = std::fs::File::open(file_path).map_err(|e| e.to_string())?;
-        let mut reader = std::io::BufReader::new(file);
-        let g1_tau_y = PrecomputationTable::read_from_reader(&mut reader, compressed)?;
-        let mut size_bytes = [0u8; 8];
-        reader
-            .read_exact(&mut size_bytes)
-            .map_err(|e| e.to_string())?;
-        let size = u64::from_le_bytes(size_bytes) as usize;
-        let u = (0..size)
-            .map(|_| {
-                PrecomputationTable::read_from_reader(&mut reader, compressed)
-                    .ok()
-                    .map(Arc::new)
-            })
-            .collect();
-        Ok(PianoPrecomputation {
-            g1_tau_y: Some(Arc::new(g1_tau_y)),
-            u,
-        })
-    }
-
-    /// Save precomputation tables to a file
-    /// The file format is:
-    /// - g1_tau_y
-    /// - size of u
-    /// - u_0
-    /// - u_1
-    /// - ...
-    /// - u_n
-    /// where each u_i is a precomputation table
-    pub fn save_to_file(&self, file_path: &str, compressed: bool) -> Result<(), String> {
-        let file = std::fs::File::create(file_path).map_err(|e| e.to_string())?;
-        let mut writer = std::io::BufWriter::new(file);
-
-        if let Some(g1_tau_y) = self.g1_tau_y.as_ref() {
-            g1_tau_y.write_to_writer(&mut writer, compressed)?;
-        } else {
-            return Err("g1_tau_y is missing".to_string());
-        }
-
-        let size = self.u.len() as u64;
-        writer
-            .write_all(&size.to_le_bytes())
-            .map_err(|e| e.to_string())?;
-        for table in self.u.iter() {
-            if let Some(table) = table {
-                table.write_to_writer(&mut writer, compressed)?;
-            } else {
-                return Err("u table is missing".to_string());
-            }
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct PianoSettings {
-    g: FsG1,
-    g_tau_x: Vec<FsG1>, //NOTE: this one is never used?
-    g_tau_y: Vec<FsG1>,
-    u: Vec<Vec<FsG1>>,
-
-    g2: FsG2,
-    g2_tau_x: FsG2,
-    g2_tau_y: FsG2,
-
-    precomputation: PianoPrecomputation,
-}
-
-impl PianoSettings {
-    pub fn g(&self) -> FsG1 {
-        self.g
-    }
-
-    /// Get g^{tau_X^i}
-    pub fn g_tau_x(&self, i: usize) -> FsG1 {
-        self.g_tau_x[i]
-    }
-
-    /// Get g^{tau_Y^i}
-    pub fn g_tau_y(&self, i: usize) -> FsG1 {
-        self.g_tau_y[i]
-    }
-
-    pub fn u(&self, i: usize, j: usize) -> FsG1 {
-        self.u[i][j]
-    }
-
-    pub fn g2(&self) -> FsG2 {
-        self.g2
-    }
-
-    pub fn g2_tau_x(&self) -> FsG2 {
-        self.g2_tau_x
-    }
-
-    pub fn g2_tau_y(&self) -> FsG2 {
-        self.g2_tau_y
-    }
-
-    pub fn set_precomputation(&mut self, precomputation: PianoPrecomputation) {
-        self.precomputation = precomputation;
-    }
-
-    pub fn get_precomputation(&self) -> &PianoPrecomputation {
-        &self.precomputation
-    }
-
-    pub fn save_setup_to_file(&self, file_path: &str, compressed: bool) -> Result<(), String> {
-        fn write_g1(file: &mut std::fs::File, el: &FsG1, compressed: bool) -> Result<(), String> {
-            if compressed {
-                let bytes = el.to_bytes();
-                std::io::Write::write(file, &bytes).map_err(|e| e.to_string())?;
-            } else {
-                let bytes = el.serialize();
-                std::io::Write::write(file, &bytes).map_err(|e| e.to_string())?;
-            }
-            Ok(())
-        }
-        fn write_g2(file: &mut std::fs::File, el: &FsG2, compressed: bool) -> Result<(), String> {
-            if compressed {
-                let bytes = el.to_bytes();
-                std::io::Write::write(file, &bytes).map_err(|e| e.to_string())?;
-            } else {
-                let bytes = el.serialize();
-                std::io::Write::write(file, &bytes).map_err(|e| e.to_string())?;
-            }
-            Ok(())
-        }
-        let mut file = std::fs::File::create(file_path).unwrap();
-
-        // Write the G1 generator
-        write_g1(&mut file, &self.g(), compressed)?;
-
-        // Write the g^{tau_X}^i
-        let encoded_g_tau_x_size = self.g_tau_x.len() as u64;
-        std::io::Write::write(&mut file, &encoded_g_tau_x_size.to_le_bytes()).unwrap();
-        for el in self.g_tau_x.iter() {
-            write_g1(&mut file, el, compressed)?;
-        }
-
-        // Write the g^{tau_Y}^i
-        let encoded_g_tau_y_size = self.g_tau_y.len() as u64;
-        std::io::Write::write(&mut file, &encoded_g_tau_y_size.to_le_bytes()).unwrap();
-        for el in self.g_tau_y.iter() {
-            write_g1(&mut file, el, compressed)?;
-        }
-
-        // Write the U_{i, j}
-        let encoded_u_rows_size = self.u.len() as u64;
-        let encoded_u_cols_size = self.u[0].len() as u64;
-        std::io::Write::write(&mut file, &encoded_u_rows_size.to_le_bytes()).unwrap();
-        std::io::Write::write(&mut file, &encoded_u_cols_size.to_le_bytes()).unwrap();
-        for row in self.u.iter() {
-            for el in row.iter() {
-                write_g1(&mut file, el, compressed)?;
-            }
-        }
-
-        // Write the G2 generator, g2^{tau_X}, g2^{tau_Y}
-        write_g2(&mut file, &self.g2, compressed)?;
-        write_g2(&mut file, &self.g2_tau_x, compressed)?;
-        write_g2(&mut file, &self.g2_tau_y, compressed)?;
-
-        Ok(())
-    }
-
-    pub fn load_setup_from_file(
-        file_path: &str,
-        compressed: bool,
-    ) -> Result<PianoSettings, String> {
-        use std::io::Read;
-        use std::sync::Arc;
-        fn load_g1(
-            reader: &mut std::io::BufReader<std::fs::File>,
-            compressed: bool,
-        ) -> Result<FsG1, String> {
-            if compressed {
-                let mut bytes = [0u8; 48];
-                reader.read_exact(&mut bytes).unwrap();
-                FsG1::from_bytes(&bytes).map_err(|e| e.to_string())
-            } else {
-                let mut bytes = [0u8; 96];
-                reader.read_exact(&mut bytes).unwrap();
-                FsG1::deserialize(&bytes).map_err(|e| e.to_string())
-            }
-        }
-
-        fn load_g2(
-            reader: &mut std::io::BufReader<std::fs::File>,
-            compressed: bool,
-        ) -> Result<FsG2, String> {
-            if compressed {
-                let mut bytes = [0u8; 96];
-                reader.read_exact(&mut bytes).unwrap();
-                FsG2::from_bytes(&bytes).map_err(|e| e.to_string())
-            } else {
-                let mut bytes = [0u8; 192];
-                reader.read_exact(&mut bytes).unwrap();
-                FsG2::deserialize(&bytes).map_err(|e| e.to_string())
-            }
-        }
-
-        fn load_g1_array(
-            reader: &mut std::io::BufReader<std::fs::File>,
-            compressed: bool,
-        ) -> Result<Vec<FsG1>, String> {
-            const COMPRESSED_SIZE: usize = 48;
-            const UNCOMPRESSED_SIZE: usize = 96;
-            let mut array_size_bytes = [0u8; 8];
-            reader.read_exact(&mut array_size_bytes).unwrap();
-            let array_size = u64::from_le_bytes(array_size_bytes) as usize;
-
-            if compressed {
-                fn g1_handler(bytes: &[u8; COMPRESSED_SIZE]) -> FsG1 {
-                    FsG1::from_bytes(bytes).expect("failed to deserialize G1 element")
-                }
-
-                kzg::io_utils::batch_reader::<COMPRESSED_SIZE, FsG1>(
-                    reader,
-                    array_size,
-                    Arc::new(g1_handler),
-                    None,
-                )
-            } else {
-                fn g1_handler(bytes: &[u8; UNCOMPRESSED_SIZE]) -> FsG1 {
-                    FsG1::deserialize(bytes).expect("failed to deserialize G1 element")
-                }
-
-                kzg::io_utils::batch_reader::<UNCOMPRESSED_SIZE, FsG1>(
-                    reader,
-                    array_size,
-                    Arc::new(g1_handler),
-                    None,
-                )
-            }
-        }
-
-        fn load_g1_matrix(
-            reader: &mut std::io::BufReader<std::fs::File>,
-            compressed: bool,
-        ) -> Result<Vec<Vec<FsG1>>, String> {
-            const COMPRESSED_SIZE: usize = 48;
-            const UNCOMPRESSED_SIZE: usize = 96;
-            let mut rows_bytes = [0u8; 8];
-            reader.read_exact(&mut rows_bytes).unwrap();
-            let rows = u64::from_le_bytes(rows_bytes) as usize;
-
-            let mut cols_bytes = [0u8; 8];
-            reader.read_exact(&mut cols_bytes).unwrap();
-            let cols = u64::from_le_bytes(cols_bytes) as usize;
-
-            if compressed {
-                fn g1_handler(bytes: &[u8; COMPRESSED_SIZE]) -> FsG1 {
-                    FsG1::from_bytes(bytes).expect("failed to deserialize G1 element")
-                }
-
-                kzg::io_utils::batch_reader::<COMPRESSED_SIZE, FsG1>(
-                    reader,
-                    rows * cols,
-                    Arc::new(g1_handler),
-                    None,
-                )
-                .map(|v| v.chunks(cols).map(|c| c.to_vec()).collect())
-            } else {
-                fn g1_handler(bytes: &[u8; UNCOMPRESSED_SIZE]) -> FsG1 {
-                    FsG1::deserialize(bytes).expect("failed to deserialize G1 element")
-                }
-
-                kzg::io_utils::batch_reader::<UNCOMPRESSED_SIZE, FsG1>(
-                    reader,
-                    rows * cols,
-                    Arc::new(g1_handler),
-                    None,
-                )
-                .map(|v| v.chunks(cols).map(|c| c.to_vec()).collect())
-            }
-        }
-
-        let file = std::fs::File::open(file_path).unwrap();
-        let mut reader = std::io::BufReader::new(file);
-        let (g, g_tau_x, g_tau_y, u, g2, g2_tau_x, g2_tau_y) = (
-            load_g1(&mut reader, compressed)?,
-            load_g1_array(&mut reader, compressed)?,
-            load_g1_array(&mut reader, compressed)?,
-            load_g1_matrix(&mut reader, compressed)?,
-            load_g2(&mut reader, compressed)?,
-            load_g2(&mut reader, compressed)?,
-            load_g2(&mut reader, compressed)?,
-        );
-
-        Ok(PianoSettings {
-            g,
-            g_tau_x,
-            g_tau_y,
-            u,
-            g2,
-            g2_tau_x,
-            g2_tau_y,
-
-            precomputation: PianoPrecomputation::default(),
-        })
-    }
-
-    pub fn save_precomputation_to_file(&self, file_path: &str, compressed: bool) -> Result<(), String> {
-        self.precomputation.save_to_file(file_path, compressed)
-    }
-
-    pub fn load_precomputation_from_file(
-        &mut self, file_path: &str, compressed: bool,
-    ) -> Result<(), String> {
-        self.precomputation = PianoPrecomputation::load_from_file(file_path, compressed)?;
-        Ok(())
-    }
-}
-
-/// We need to generate the following:
-/// 2. two secret field elements tau_X, tau_Y
-/// 3. g^{tau_X}
-/// 4. g^{tau_Y}
-/// 5. U_{i, j} = g^{R_i(tau_Y) * L_j(tau_X)}
-/// Then we forget tau_X, tau_Y
-pub fn generate_trusted_setup(
-    fft_settings: &PianoFFTSettings,
-    secrets: [[u8; 32usize]; 2],
-) -> PianoSettings {
-    // Generate tau_X, tau_Y
-    let tau_x = hash_to_bls_field(&secrets[0]);
-    let tau_y = hash_to_bls_field(&secrets[1]);
-
-    // G1
-    let g = rust_kzg_blst::consts::G1_GENERATOR;
-
-    let sub_circuit_size = 2usize.pow(fft_settings.t() as u32);
-    let machine_count = 2usize.pow(fft_settings.m() as u32);
-
-    let g_tau_x = (0..sub_circuit_size)
-        .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
-            acc.push(g.mul(&pow));
-            pow = pow.mul(&tau_x);
-            (acc, pow)
-        })
-        .0;
-    let g_tau_y = (0..machine_count)
-        .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
-            acc.push(g.mul(&pow));
-            pow = pow.mul(&tau_y);
-            (acc, pow)
-        })
-        .0;
-
-    let u = (0..machine_count)
-        .map(|i| {
-            (0..sub_circuit_size)
-                .map(|j| {
-                    let r = fft_settings.right_lagrange_poly(i).unwrap();
-                    let l = fft_settings.left_lagrange_poly(j).unwrap();
-                    let r_tau_y = r.eval(&tau_y);
-                    let l_tau_x = l.eval(&tau_x);
-                    g.mul(&r_tau_y.mul(&l_tau_x))
-                })
-                .collect()
-        })
-        .collect();
-
-    // G2
-    let g2 = rust_kzg_blst::consts::G2_GENERATOR;
-
-    let g2_tau_x = g2.mul(&tau_x);
-    let g2_tau_y = g2.mul(&tau_y);
-
-    PianoSettings {
-        g,
-        g_tau_x,
-        g_tau_y,
-        u,
-
-        g2,
-        g2_tau_x,
-        g2_tau_y,
-
-        precomputation: PianoPrecomputation::default(),
-    }
-}
-
-pub struct PianoFFTSettings {
-    left: FsFFTSettings,
-    right: FsFFTSettings,
-
-    n: usize,
-    m: usize,
-    t: usize,
-}
-
-impl PianoFFTSettings {
-    /// Create a new FFT settings for the Piano protocol
-    /// 2**n is the circuit size
-    /// 2**m is the number of machines
-    pub fn new(n: usize, m: usize) -> Result<PianoFFTSettings, String> {
-        if m > n {
-            return Err("m must be less than or equal to n".to_string());
-        }
-
-        let t = n - m;
-        tracing::debug!("initializing FFT settings, left = {}, right = {}", t, m);
-        let left = FsFFTSettings::new(t)?;
-        tracing::debug!("left max width {:?}", left.get_max_width());
-        let right = FsFFTSettings::new(m)?;
-        tracing::debug!("right max width {:?}", right.get_max_width());
-
-        Ok(PianoFFTSettings {
-            left,
-            right,
-            n,
-            m,
-            t,
-        })
-    }
-
-    /// Circuit size
-    pub fn n(&self) -> usize {
-        self.n
-    }
-
-    /// Number of machines
-    pub fn m(&self) -> usize {
-        self.m
-    }
-
-    /// Sub-circuit size
-    pub fn t(&self) -> usize {
-        self.t
-    }
-
-    /// Perform FFT on the left side
-    /// If data is not of length 2**t, it will be zero-padded
-    pub fn fft_left(&self, data: &[FsFr], inverse: bool) -> Result<Vec<FsFr>, String> {
-        self.left.fft_fr(data, inverse)
-    }
-
-    /// Perform FFT on the right side
-    pub fn fft_right(&self, data: &[FsFr], inverse: bool) -> Result<Vec<FsFr>, String> {
-        self.right.fft_fr(data, inverse)
-    }
-
-    /// Get the j-th root of unity for the left FFT
-    /// omega_X^j = omega_t^j
-    pub fn left_expanded_root_of_unity(&self, j: usize) -> FsFr {
-        self.left.get_expanded_roots_of_unity_at(j)
-    }
-
-    /// Get the i-th root of unity for the right FFT
-    /// omega_Y^i = omega_m^i
-    pub fn right_expanded_root_of_unity(&self, i: usize) -> FsFr {
-        self.right.get_expanded_roots_of_unity_at(i)
-    }
-
-    /// Get the j-th lagrange polynomial for the left FFT
-    /// Let omega_X be a primitive T-th root of unity
-    /// L_j(X) = (omega_X^j / t) * (X^t - 1) / (X - omega_X^j)
-    pub fn left_lagrange_poly(&self, i: usize) -> Result<FsPoly, String> {
-        let mut coeffs = vec![FsFr::zero(); self.left.get_max_width()];
-        coeffs[i] = FsFr::one();
-        coeffs = self.fft_left(&coeffs, true)?;
-        Ok(FsPoly::from_coeffs(&coeffs))
-    }
-
-    /// Get the i-th lagrange polynomial for the right FFT
-    /// Let omega_Y be a primitive M-th root of unity
-    /// R_i(Y) = (omega_Y^i / M) * (Y^M - 1) / (Y - omega_Y^i)
-    pub fn right_lagrange_poly(&self, i: usize) -> Result<FsPoly, String> {
-        let mut coeffs = vec![FsFr::zero(); self.right.get_max_width()];
-        coeffs[i] = FsFr::one();
-        coeffs = self.fft_right(&coeffs, true)?;
-        Ok(FsPoly::from_coeffs(&coeffs))
-    }
-}
-
+#[derive(Debug, Clone)]
 pub struct PianoBackend {
-    fft_settings: PianoFFTSettings,
-    piano_settings: PianoSettings,
+    pub fft_settings: PianoFFTSettings,
+    pub piano_settings: PianoSettings,
 }
 
 impl PianoBackend {
-    pub fn new(n: usize, m: usize, secrets: &[[u8; 32usize]; 2]) -> PianoBackend {
-        let fft_settings = PianoFFTSettings::new(n, m).unwrap();
-        let mut piano_settings = crate::utils::timed("Generating Trusted Setup", || {
-            generate_trusted_setup(&fft_settings, *secrets)
-        });
-        let precomputation = crate::utils::timed("Generating Precomputations", || {
-            PianoPrecomputation::generate(&piano_settings).unwrap()
-        });
-        piano_settings.set_precomputation(precomputation);
+    pub fn new(cfg: Option<DistributedBackendConfig>) -> Self {
+        let cfg = cfg.unwrap_or_default().into();
+        Self::setup(cfg).expect("Failed to setup KZGSettings")
+    }
 
-        PianoBackend {
+    pub fn setup(cfg: DistributedSetupConfig) -> Result<Self, String> {
+        use crate::utils::timed;
+        use rand::Rng;
+        let fft_settings = timed("Creating FFTSettings", || PianoFFTSettings::from(&cfg));
+
+        let mut piano_settings = if cfg.setup.generate_setup() {
+            timed("Generating Trusted Setup", || {
+                let secrets: [[u8; 32]; 2] = [rand::thread_rng().gen(), rand::thread_rng().gen()];
+                generate_trusted_setup(&fft_settings, secrets)
+            })
+        } else {
+            timed("Reading trusted setup from file", || {
+                tracing::debug!("Reading secrets from file {}", cfg.setup.setup_path());
+                PianoSettings::load_setup_from_file(cfg.setup.setup_path(), cfg.setup.compressed())
+            })?
+        };
+
+        if cfg.setup.generate_precompute() {
+            timed("Generating Precomputations", || {
+                piano_settings.generate_precomputation()
+            })?;
+        } else {
+            timed("Loading Precomputations from file", || {
+                piano_settings.load_precomputation_from_file(
+                    cfg.setup.precompute_path(),
+                    cfg.setup.compressed(),
+                )
+            })?;
+        }
+
+        Ok(PianoBackend {
             fft_settings,
             piano_settings,
-        }
+        })
     }
 
     /// Commit to a polynomial f_i(X) as if we are machine i
@@ -868,6 +379,553 @@ impl PianoBackend {
     }
 }
 
+type OptionalPrecomputationTable = Option<Arc<PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>>>;
+
+#[derive(Debug, Default, PartialEq, Clone)]
+pub struct PianoPrecomputation {
+    pub g1_tau_y: OptionalPrecomputationTable,
+
+    pub u: Vec<OptionalPrecomputationTable>,
+}
+
+impl PianoPrecomputation {
+    pub fn generate(settings: &PianoSettings) -> Result<Self, String> {
+        let g1_tau_y = precompute(&settings.g_tau_y).ok().flatten().map(Arc::new);
+        let mut u = vec![None; settings.u.len()];
+        for (i, row) in settings.u.iter().enumerate() {
+            u[i] = precompute(row).ok().flatten().map(Arc::new);
+        }
+        Ok(PianoPrecomputation { g1_tau_y, u })
+    }
+
+    pub fn get_g1_tau_y(&self) -> Option<&PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>> {
+        self.g1_tau_y.as_ref().map(|v| v.as_ref())
+    }
+
+    pub fn get_u(&self, i: usize) -> Option<&PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>> {
+        if i >= self.u.len() {
+            return None;
+        }
+        self.u[i].as_ref().map(|v| v.as_ref())
+    }
+
+    /// Load precomputation tables from a file
+    /// The file format is:
+    /// - g1_tau_y
+    /// - size of u
+    /// - u_0
+    /// - u_1
+    /// - ...
+    /// - u_n
+    /// where each u_i is a precomputation table
+    pub fn load_from_file(file_path: &str, compressed: bool) -> Result<Self, String> {
+        use std::io::Read;
+
+        let file = std::fs::File::open(file_path).map_err(|e| e.to_string())?;
+        let mut reader = std::io::BufReader::new(file);
+
+        let g1_tau_y = PrecomputationTable::read_from_reader(&mut reader, compressed)?;
+
+        let mut size_bytes = [0u8; 8];
+        reader
+            .read_exact(&mut size_bytes)
+            .map_err(|e| e.to_string())?;
+        let size = u64::from_le_bytes(size_bytes) as usize;
+        let u = (0..size)
+            .map(|_| {
+                PrecomputationTable::read_from_reader(&mut reader, compressed)
+                    .ok()
+                    .map(Arc::new)
+            })
+            .collect();
+        Ok(PianoPrecomputation {
+            g1_tau_y: Some(Arc::new(g1_tau_y)),
+            u,
+        })
+    }
+
+    /// Save precomputation tables to a file
+    /// The file format is:
+    /// - g1_tau_y
+    /// - size of u
+    /// - u_0
+    /// - u_1
+    /// - ...
+    /// - u_n
+    /// where each u_i is a precomputation table
+    pub fn save_to_file(&self, file_path: &str, compressed: bool) -> Result<(), String> {
+        let file = std::fs::File::create(file_path).map_err(|e| e.to_string())?;
+        let mut writer = std::io::BufWriter::new(file);
+
+        if let Some(g1_tau_y) = self.g1_tau_y.as_ref() {
+            g1_tau_y.write_to_writer(&mut writer, compressed)?;
+        } else {
+            return Err("g1_tau_y is missing".to_string());
+        }
+
+        let size = self.u.len() as u64;
+        writer
+            .write_all(&size.to_le_bytes())
+            .map_err(|e| e.to_string())?;
+        for table in self.u.iter() {
+            if let Some(table) = table {
+                table.write_to_writer(&mut writer, compressed)?;
+            } else {
+                return Err("u table is missing".to_string());
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PianoSettings {
+    g: FsG1,
+    g_tau_x: Vec<FsG1>, //NOTE: this one is never used?
+    g_tau_y: Vec<FsG1>,
+    u: Vec<Vec<FsG1>>,
+
+    g2: FsG2,
+    g2_tau_x: FsG2,
+    g2_tau_y: FsG2,
+
+    precomputation: PianoPrecomputation,
+}
+
+impl PianoSettings {
+    pub fn g(&self) -> FsG1 {
+        self.g
+    }
+
+    /// Get g^{tau_X^i}
+    pub fn g_tau_x(&self, i: usize) -> FsG1 {
+        self.g_tau_x[i]
+    }
+
+    /// Get g^{tau_Y^i}
+    pub fn g_tau_y(&self, i: usize) -> FsG1 {
+        self.g_tau_y[i]
+    }
+
+    pub fn u(&self, i: usize, j: usize) -> FsG1 {
+        self.u[i][j]
+    }
+
+    pub fn g2(&self) -> FsG2 {
+        self.g2
+    }
+
+    pub fn g2_tau_x(&self) -> FsG2 {
+        self.g2_tau_x
+    }
+
+    pub fn g2_tau_y(&self) -> FsG2 {
+        self.g2_tau_y
+    }
+
+    pub fn set_precomputation(&mut self, precomputation: PianoPrecomputation) {
+        self.precomputation = precomputation;
+    }
+
+    pub fn get_precomputation(&self) -> &PianoPrecomputation {
+        &self.precomputation
+    }
+
+    pub fn generate_precomputation(&mut self) -> Result<(), String> {
+        self.precomputation = PianoPrecomputation::generate(self)?;
+        Ok(())
+    }
+
+    pub fn save_setup_to_file(&self, file_path: &str, compressed: bool) -> Result<(), String> {
+        fn write_g1(file: &mut std::fs::File, el: &FsG1, compressed: bool) -> Result<(), String> {
+            if compressed {
+                let bytes = el.to_bytes();
+                std::io::Write::write(file, &bytes).map_err(|e| e.to_string())?;
+            } else {
+                let bytes = el.serialize();
+                std::io::Write::write(file, &bytes).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        }
+        fn write_g2(file: &mut std::fs::File, el: &FsG2, compressed: bool) -> Result<(), String> {
+            if compressed {
+                let bytes = el.to_bytes();
+                std::io::Write::write(file, &bytes).map_err(|e| e.to_string())?;
+            } else {
+                let bytes = el.serialize();
+                std::io::Write::write(file, &bytes).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        }
+        let mut file = std::fs::File::create(file_path).unwrap();
+
+        // Write the G1 generator
+        write_g1(&mut file, &self.g(), compressed)?;
+
+        // Write the g^{tau_X}^i
+        let encoded_g_tau_x_size = self.g_tau_x.len() as u64;
+        std::io::Write::write(&mut file, &encoded_g_tau_x_size.to_le_bytes()).unwrap();
+        for el in self.g_tau_x.iter() {
+            write_g1(&mut file, el, compressed)?;
+        }
+
+        // Write the g^{tau_Y}^i
+        let encoded_g_tau_y_size = self.g_tau_y.len() as u64;
+        std::io::Write::write(&mut file, &encoded_g_tau_y_size.to_le_bytes()).unwrap();
+        for el in self.g_tau_y.iter() {
+            write_g1(&mut file, el, compressed)?;
+        }
+
+        // Write the U_{i, j}
+        let encoded_u_rows_size = self.u.len() as u64;
+        let encoded_u_cols_size = self.u[0].len() as u64;
+        std::io::Write::write(&mut file, &encoded_u_rows_size.to_le_bytes()).unwrap();
+        std::io::Write::write(&mut file, &encoded_u_cols_size.to_le_bytes()).unwrap();
+        for row in self.u.iter() {
+            for el in row.iter() {
+                write_g1(&mut file, el, compressed)?;
+            }
+        }
+
+        // Write the G2 generator, g2^{tau_X}, g2^{tau_Y}
+        write_g2(&mut file, &self.g2, compressed)?;
+        write_g2(&mut file, &self.g2_tau_x, compressed)?;
+        write_g2(&mut file, &self.g2_tau_y, compressed)?;
+
+        Ok(())
+    }
+
+    pub fn load_setup_from_file(
+        file_path: &str,
+        compressed: bool,
+    ) -> Result<PianoSettings, String> {
+        use std::io::Read;
+        use std::sync::Arc;
+        fn load_g1(
+            reader: &mut std::io::BufReader<std::fs::File>,
+            compressed: bool,
+        ) -> Result<FsG1, String> {
+            if compressed {
+                let mut bytes = [0u8; 48];
+                reader.read_exact(&mut bytes).unwrap();
+                FsG1::from_bytes(&bytes).map_err(|e| e.to_string())
+            } else {
+                let mut bytes = [0u8; 96];
+                reader.read_exact(&mut bytes).unwrap();
+                FsG1::deserialize(&bytes).map_err(|e| e.to_string())
+            }
+        }
+
+        fn load_g2(
+            reader: &mut std::io::BufReader<std::fs::File>,
+            compressed: bool,
+        ) -> Result<FsG2, String> {
+            if compressed {
+                let mut bytes = [0u8; 96];
+                reader.read_exact(&mut bytes).unwrap();
+                FsG2::from_bytes(&bytes).map_err(|e| e.to_string())
+            } else {
+                let mut bytes = [0u8; 192];
+                reader.read_exact(&mut bytes).unwrap();
+                FsG2::deserialize(&bytes).map_err(|e| e.to_string())
+            }
+        }
+
+        fn load_g1_array(
+            reader: &mut std::io::BufReader<std::fs::File>,
+            compressed: bool,
+        ) -> Result<Vec<FsG1>, String> {
+            const COMPRESSED_SIZE: usize = 48;
+            const UNCOMPRESSED_SIZE: usize = 96;
+            let mut array_size_bytes = [0u8; 8];
+            reader.read_exact(&mut array_size_bytes).unwrap();
+            let array_size = u64::from_le_bytes(array_size_bytes) as usize;
+
+            if compressed {
+                fn g1_handler(bytes: &[u8; COMPRESSED_SIZE]) -> FsG1 {
+                    FsG1::from_bytes(bytes).expect("failed to deserialize G1 element")
+                }
+
+                kzg::io_utils::batch_reader::<COMPRESSED_SIZE, FsG1>(
+                    reader,
+                    array_size,
+                    Arc::new(g1_handler),
+                    None,
+                )
+            } else {
+                fn g1_handler(bytes: &[u8; UNCOMPRESSED_SIZE]) -> FsG1 {
+                    FsG1::deserialize(bytes).expect("failed to deserialize G1 element")
+                }
+
+                kzg::io_utils::batch_reader::<UNCOMPRESSED_SIZE, FsG1>(
+                    reader,
+                    array_size,
+                    Arc::new(g1_handler),
+                    None,
+                )
+            }
+        }
+
+        fn load_g1_matrix(
+            reader: &mut std::io::BufReader<std::fs::File>,
+            compressed: bool,
+        ) -> Result<Vec<Vec<FsG1>>, String> {
+            const COMPRESSED_SIZE: usize = 48;
+            const UNCOMPRESSED_SIZE: usize = 96;
+            let mut rows_bytes = [0u8; 8];
+            reader.read_exact(&mut rows_bytes).unwrap();
+            let rows = u64::from_le_bytes(rows_bytes) as usize;
+
+            let mut cols_bytes = [0u8; 8];
+            reader.read_exact(&mut cols_bytes).unwrap();
+            let cols = u64::from_le_bytes(cols_bytes) as usize;
+
+            if compressed {
+                fn g1_handler(bytes: &[u8; COMPRESSED_SIZE]) -> FsG1 {
+                    FsG1::from_bytes(bytes).expect("failed to deserialize G1 element")
+                }
+
+                kzg::io_utils::batch_reader::<COMPRESSED_SIZE, FsG1>(
+                    reader,
+                    rows * cols,
+                    Arc::new(g1_handler),
+                    None,
+                )
+                .map(|v| v.chunks(cols).map(|c| c.to_vec()).collect())
+            } else {
+                fn g1_handler(bytes: &[u8; UNCOMPRESSED_SIZE]) -> FsG1 {
+                    FsG1::deserialize(bytes).expect("failed to deserialize G1 element")
+                }
+
+                kzg::io_utils::batch_reader::<UNCOMPRESSED_SIZE, FsG1>(
+                    reader,
+                    rows * cols,
+                    Arc::new(g1_handler),
+                    None,
+                )
+                .map(|v| v.chunks(cols).map(|c| c.to_vec()).collect())
+            }
+        }
+
+        let file = std::fs::File::open(file_path).unwrap();
+        let mut reader = std::io::BufReader::new(file);
+        let (g, g_tau_x, g_tau_y, u, g2, g2_tau_x, g2_tau_y) = (
+            load_g1(&mut reader, compressed)?,
+            load_g1_array(&mut reader, compressed)?,
+            load_g1_array(&mut reader, compressed)?,
+            load_g1_matrix(&mut reader, compressed)?,
+            load_g2(&mut reader, compressed)?,
+            load_g2(&mut reader, compressed)?,
+            load_g2(&mut reader, compressed)?,
+        );
+
+        Ok(PianoSettings {
+            g,
+            g_tau_x,
+            g_tau_y,
+            u,
+            g2,
+            g2_tau_x,
+            g2_tau_y,
+
+            precomputation: PianoPrecomputation::default(),
+        })
+    }
+
+    pub fn save_precomputation_to_file(
+        &self,
+        file_path: &str,
+        compressed: bool,
+    ) -> Result<(), String> {
+        crate::utils::timed("Saving precomputation", || {
+            self.precomputation.save_to_file(file_path, compressed)
+        })
+    }
+
+    pub fn load_precomputation_from_file(
+        &mut self,
+        file_path: &str,
+        compressed: bool,
+    ) -> Result<(), String> {
+        self.precomputation = crate::utils::timed("Loading precomputation", || {
+            PianoPrecomputation::load_from_file(file_path, compressed)
+        })?;
+        Ok(())
+    }
+}
+
+/// We need to generate the following:
+/// 2. two secret field elements tau_X, tau_Y
+/// 3. g^{tau_X}
+/// 4. g^{tau_Y}
+/// 5. U_{i, j} = g^{R_i(tau_Y) * L_j(tau_X)}
+/// Then we forget tau_X, tau_Y
+pub fn generate_trusted_setup(
+    fft_settings: &PianoFFTSettings,
+    secrets: [[u8; 32usize]; 2],
+) -> PianoSettings {
+    // Generate tau_X, tau_Y
+    let tau_x = hash_to_bls_field(&secrets[0]);
+    let tau_y = hash_to_bls_field(&secrets[1]);
+
+    // G1
+    let g = rust_kzg_blst::consts::G1_GENERATOR;
+
+    let sub_circuit_size = 2usize.pow(fft_settings.t() as u32);
+    let machine_count = 2usize.pow(fft_settings.m() as u32);
+
+    let g_tau_x = (0..sub_circuit_size)
+        .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
+            acc.push(g.mul(&pow));
+            pow = pow.mul(&tau_x);
+            (acc, pow)
+        })
+        .0;
+    let g_tau_y = (0..machine_count)
+        .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
+            acc.push(g.mul(&pow));
+            pow = pow.mul(&tau_y);
+            (acc, pow)
+        })
+        .0;
+
+    let u = (0..machine_count)
+        .map(|i| {
+            (0..sub_circuit_size)
+                .map(|j| {
+                    let r = fft_settings.right_lagrange_poly(i).unwrap();
+                    let l = fft_settings.left_lagrange_poly(j).unwrap();
+                    let r_tau_y = r.eval(&tau_y);
+                    let l_tau_x = l.eval(&tau_x);
+                    g.mul(&r_tau_y.mul(&l_tau_x))
+                })
+                .collect()
+        })
+        .collect();
+
+    // G2
+    let g2 = rust_kzg_blst::consts::G2_GENERATOR;
+
+    let g2_tau_x = g2.mul(&tau_x);
+    let g2_tau_y = g2.mul(&tau_y);
+
+    PianoSettings {
+        g,
+        g_tau_x,
+        g_tau_y,
+        u,
+
+        g2,
+        g2_tau_x,
+        g2_tau_y,
+
+        precomputation: PianoPrecomputation::default(),
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PianoFFTSettings {
+    left: FsFFTSettings,
+    right: FsFFTSettings,
+
+    n: usize,
+    m: usize,
+    t: usize,
+}
+
+impl From<&DistributedSetupConfig> for PianoFFTSettings {
+    fn from(config: &DistributedSetupConfig) -> Self {
+        let m = config.machine_scale;
+        let n = config.setup.scale;
+        Self::new(n, m).unwrap()
+    }
+}
+
+impl PianoFFTSettings {
+    /// Create a new FFT settings for the Piano protocol
+    /// 2**n is the circuit size
+    /// 2**m is the number of machines
+    pub fn new(n: usize, m: usize) -> Result<PianoFFTSettings, String> {
+        if m > n {
+            return Err("m must be less than or equal to n".to_string());
+        }
+
+        let t = n - m;
+        tracing::debug!("initializing FFT settings, left = {}, right = {}", t, m);
+        let left = FsFFTSettings::new(t)?;
+        tracing::debug!("left max width {:?}", left.get_max_width());
+        let right = FsFFTSettings::new(m)?;
+        tracing::debug!("right max width {:?}", right.get_max_width());
+
+        Ok(PianoFFTSettings {
+            left,
+            right,
+            n,
+            m,
+            t,
+        })
+    }
+
+    /// Circuit size
+    pub fn n(&self) -> usize {
+        self.n
+    }
+
+    /// Number of machines
+    pub fn m(&self) -> usize {
+        self.m
+    }
+
+    /// Sub-circuit size
+    pub fn t(&self) -> usize {
+        self.t
+    }
+
+    /// Perform FFT on the left side
+    /// If data is not of length 2**t, it will be zero-padded
+    pub fn fft_left(&self, data: &[FsFr], inverse: bool) -> Result<Vec<FsFr>, String> {
+        self.left.fft_fr(data, inverse)
+    }
+
+    /// Perform FFT on the right side
+    pub fn fft_right(&self, data: &[FsFr], inverse: bool) -> Result<Vec<FsFr>, String> {
+        self.right.fft_fr(data, inverse)
+    }
+
+    /// Get the j-th root of unity for the left FFT
+    /// omega_X^j = omega_t^j
+    pub fn left_expanded_root_of_unity(&self, j: usize) -> FsFr {
+        self.left.get_expanded_roots_of_unity_at(j)
+    }
+
+    /// Get the i-th root of unity for the right FFT
+    /// omega_Y^i = omega_m^i
+    pub fn right_expanded_root_of_unity(&self, i: usize) -> FsFr {
+        self.right.get_expanded_roots_of_unity_at(i)
+    }
+
+    /// Get the j-th lagrange polynomial for the left FFT
+    /// Let omega_X be a primitive T-th root of unity
+    /// L_j(X) = (omega_X^j / t) * (X^t - 1) / (X - omega_X^j)
+    pub fn left_lagrange_poly(&self, i: usize) -> Result<FsPoly, String> {
+        let mut coeffs = vec![FsFr::zero(); self.left.get_max_width()];
+        coeffs[i] = FsFr::one();
+        coeffs = self.fft_left(&coeffs, true)?;
+        Ok(FsPoly::from_coeffs(&coeffs))
+    }
+
+    /// Get the i-th lagrange polynomial for the right FFT
+    /// Let omega_Y be a primitive M-th root of unity
+    /// R_i(Y) = (omega_Y^i / M) * (Y^M - 1) / (Y - omega_Y^i)
+    pub fn right_lagrange_poly(&self, i: usize) -> Result<FsPoly, String> {
+        let mut coeffs = vec![FsFr::zero(); self.right.get_max_width()];
+        coeffs[i] = FsFr::one();
+        coeffs = self.fft_right(&coeffs, true)?;
+        Ok(FsPoly::from_coeffs(&coeffs))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::bipoly::BivariateFsPolynomial;
@@ -1136,7 +1194,14 @@ mod tests {
             .collect::<Vec<_>>();
 
         let fft_settings = PianoFFTSettings::new(N, M).unwrap();
-        let backend = PianoBackend::new(N, M, &[[0u8; 32usize], [1u8; 32usize]]);
+        let cfg = DistributedBackendConfig {
+            backend: crate::engine::config::BackendConfig {
+                scale: N,
+                ..Default::default()
+            },
+            machine_scale: MACHINES,
+        };
+        let backend = PianoBackend::new(cfg.into());
 
         // Commit to the polynomial using the backend
         let commitments = (0..M)
@@ -1341,7 +1406,14 @@ mod tests {
             );
 
             // Start one backend
-            let backend = PianoBackend::new(n, m, &[[0u8; 32usize], [1u8; 32usize]]);
+            let cfg = DistributedBackendConfig {
+                backend: crate::engine::config::BackendConfig {
+                    scale: n,
+                    ..Default::default()
+                },
+                machine_scale: m,
+            };
+            let backend = PianoBackend::new(cfg.into());
 
             // Generate the polynomial we'll be working with in the standard basis
             // f(x, y) = sum_{i=0}^{n} sum_{j=0}^{m} f_{i,j} L(j) R(i)
@@ -1431,25 +1503,42 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_save_and_load_setup() {
-        const FILENAME: &str = "piano_setup.json";
+        const N: usize = 8;
+        const M: usize = 2;
+        const FILENAME: &str = "test_piano_setup.json";
+        std::fs::remove_file(FILENAME).unwrap_or_default();
         fn assert_eq(a: &PianoSettings, b: &PianoSettings) {
-            assert_eq!(a.g(), b.g());
-            assert_eq!(a.g2(), b.g2());
+            assert_eq!(a.g, b.g);
             assert_eq!(a.g_tau_x, b.g_tau_x);
             assert_eq!(a.g_tau_y, b.g_tau_y);
+            assert_eq!(a.u, b.u);
+            assert_eq!(a.g2, b.g2);
             assert_eq!(a.g2_tau_x, b.g2_tau_x);
             assert_eq!(a.g2_tau_y, b.g2_tau_y);
-            assert_eq!(a.u, b.u);
         }
         fn test_save_load(backend: &PianoBackend, compressed: bool) {
-            assert!(backend
-                .piano_settings
-                .save_setup_to_file(FILENAME, compressed)
-                .is_ok());
-            let loaded = PianoSettings::load_setup_from_file(FILENAME, compressed).unwrap();
+            crate::utils::timed("Saving Setup", || {
+                assert!(backend
+                    .piano_settings
+                    .save_setup_to_file(FILENAME, compressed)
+                    .is_ok());
+            });
+            let loaded = crate::utils::timed("Loading Setup", || {
+                PianoSettings::load_setup_from_file(FILENAME, compressed).unwrap()
+            });
             assert_eq(&backend.piano_settings, &loaded);
         }
-        let backend = PianoBackend::new(4, 2, &[[0u8; 32usize], [1u8; 32usize]]);
+
+        // Generate a new backend
+        let cfg = DistributedSetupConfig {
+            setup: crate::engine::config::SetupConfig {
+                scale: N,
+                generate_setup: true,
+                ..Default::default()
+            },
+            machine_scale: M,
+        };
+        let backend = PianoBackend::setup(cfg).unwrap();
 
         test_save_load(&backend, true);
         test_save_load(&backend, false);
@@ -1460,21 +1549,105 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_save_and_load_precompute() {
-        const FILENAME: &str = "piano_precompute.json";
-        fn assert_eq(a: &PianoPrecomputation, b: &PianoPrecomputation) {
-            // TODO: implement PartialEq for PianoPrecomputation
-            todo!();
-        }
-        fn test_save_load(backend: &PianoBackend, compressed: bool) {
-            assert!(backend.piano_settings.save_precomputation_to_file(FILENAME, compressed).is_ok());
-            let loaded = PianoPrecomputation::load_from_file(FILENAME, compressed).unwrap();
-            assert_eq(backend.piano_settings.get_precomputation(), &loaded);
-        }
-        let backend = PianoBackend::new(4, 2, &[[0u8; 32usize], [1u8; 32usize]]);
+        const N: usize = 8;
+        const M: usize = 2;
+        const FILENAME: &str = "test_piano_precompute.json";
+        std::fs::remove_file(FILENAME).unwrap_or_default();
+        fn test_save_load(
+            backend: &PianoBackend,
+            compressed: bool,
+            polys: &[FsPoly],
+            commitments: &[FsG1],
+        ) {
+            crate::utils::timed("Saving Precomputations", || {
+                assert!(backend
+                    .piano_settings
+                    .save_precomputation_to_file(FILENAME, compressed)
+                    .is_ok());
+            });
+            let loaded = crate::utils::timed("Loading Precomputations", || {
+                PianoPrecomputation::load_from_file(FILENAME, compressed).unwrap()
+            });
+            let mut new_backend = backend.clone();
+            new_backend.piano_settings.set_precomputation(loaded);
 
-        test_save_load(&backend, true);
-        test_save_load(&backend, false);
+            let new_commitments =
+                crate::utils::timed(format!("Committing {} polynomials", M).as_str(), || {
+                    (0..M)
+                        .map(|i| new_backend.commit(i, &polys[i]).unwrap())
+                        .collect::<Vec<_>>()
+                });
+
+            crate::utils::timed(format!("Checking {} commitments", M).as_str(), || {
+                new_commitments
+                    .iter()
+                    .zip(commitments.iter())
+                    .for_each(|(a, b)| {
+                        assert_eq!(a, b);
+                    });
+            });
+        }
+
+        let cfg = DistributedSetupConfig {
+            setup: crate::engine::config::SetupConfig {
+                generate_precompute: true,
+                generate_setup: true,
+                scale: N,
+                ..Default::default()
+            },
+            machine_scale: M,
+        };
+        let backend = PianoBackend::setup(cfg).unwrap();
+
+        let coeffs = generate_coeffs(N, M);
+        let polynomials = coeffs
+            .iter()
+            .map(|coeffs| FsPoly::from_coeffs(coeffs))
+            .collect::<Vec<_>>();
+        let commitments = (0..M)
+            .map(|i| backend.commit(i, &polynomials[i]).unwrap())
+            .collect::<Vec<_>>();
+
+        test_save_load(&backend, false, &polynomials, &commitments);
 
         std::fs::remove_file(FILENAME).unwrap();
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn bench_precompute() {
+        const N: usize = 14;
+        const M: usize = 2;
+        let cfg = DistributedSetupConfig {
+            setup: crate::engine::config::SetupConfig {
+                generate_precompute: true,
+                generate_setup: true,
+                scale: N,
+                ..Default::default()
+            },
+            machine_scale: M,
+        };
+
+        let backend = PianoBackend::setup(cfg).unwrap();
+        let mut backend_without_precompute = backend.clone();
+        backend_without_precompute.piano_settings.precomputation = PianoPrecomputation::default();
+
+        let coeffs = generate_coeffs(N, M);
+        let polynomials = coeffs
+            .iter()
+            .map(|coeffs| FsPoly::from_coeffs(coeffs))
+            .collect::<Vec<_>>();
+
+        crate::utils::timed("Committing with precompute", || {
+            (0..M)
+                .map(|i| backend.commit(i, &polynomials[i]).unwrap())
+                .collect::<Vec<_>>()
+        });
+
+        crate::utils::timed("Committing without precompute", || {
+            (0..M)
+                .map(|i| backend_without_precompute.commit(i, &polynomials[i]).unwrap())
+                .collect::<Vec<_>>()
+        });
     }
 }

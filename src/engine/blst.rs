@@ -289,9 +289,9 @@ impl crate::engine::backend::Backend for BlstBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::RunArgs;
+    use crate::cli::SetupArgs;
     use crate::engine::backend::Backend;
-    use crate::RunArgs;
-    use crate::SetupArgs;
     use kzg::Fr;
     use kzg::Poly;
 
@@ -389,6 +389,7 @@ mod tests {
                 uncompressed: *uncompressed,
                 decompress_existing: false,
                 compress_existing: false,
+                ..Default::default()
             };
             BlstBackend::setup_and_save(args.into()).expect("Failed to setup KZGSettings");
             debug!("wrote setup and precompute for uncompressed: {}", *uncompressed);
@@ -399,6 +400,7 @@ mod tests {
                 setup_path: Some(SETUP_PATH.to_owned()),
                 precompute_path: Some(PRECOMPUTE_PATH.to_owned()),
                 uncompressed: *uncompressed,
+                ..Default::default()
             };
             let backend = BlstBackend::new(Some(args.into()));
             debug!("loaded setup and precompute for uncompressed: {}", *uncompressed);
@@ -470,6 +472,7 @@ mod tests {
             uncompressed: UNCOMPRESSED,
             decompress_existing: false,
             compress_existing: false,
+            ..Default::default()
         };
 
         BlstBackend::setup_and_save(setup_args.into()).expect("Failed to setup KZGSettings");
@@ -482,6 +485,7 @@ mod tests {
             setup_path: Some(SETUP_PATH.to_owned()),
             precompute_path: Some(PRECOMPUTE_PATH.to_owned()),
             uncompressed: UNCOMPRESSED,
+            ..Default::default()
         };
 
         let backend = BlstBackend::new(Some(run_args.into()));
@@ -516,6 +520,7 @@ mod tests {
             uncompressed: UNCOMPRESSED,
             decompress_existing: false,
             compress_existing: false,
+            ..Default::default()
         };
         BlstBackend::setup_and_save(setup_args.into()).expect("Failed to setup KZGSettings");
 
@@ -534,6 +539,7 @@ mod tests {
             uncompressed: UNCOMPRESSED,
             decompress_existing: true,
             compress_existing: false,
+            ..Default::default()
         };
         BlstBackend::setup_and_save(setup_args.into()).expect("Failed to setup KZGSettings");
         
@@ -549,6 +555,7 @@ mod tests {
             setup_path: Some(format!("{}.decompressed", SETUP_PATH)),
             precompute_path: Some(format!("{}.decompressed", PRECOMPUTE_PATH)),
             uncompressed: !UNCOMPRESSED,
+            ..Default::default()
         };
 
         let backend = BlstBackend::new(Some(run_args.into()));
@@ -585,6 +592,7 @@ mod tests {
             uncompressed: UNCOMPRESSED,
             decompress_existing: false,
             compress_existing: false,
+            ..Default::default()
         };
         BlstBackend::setup_and_save(setup_args.into()).expect("Failed to setup KZGSettings");
         
@@ -603,6 +611,7 @@ mod tests {
             uncompressed: UNCOMPRESSED,
             decompress_existing: false,
             compress_existing: true,
+            ..Default::default()
         };
         BlstBackend::setup_and_save(setup_args.into()).expect("Failed to setup KZGSettings");
         
@@ -618,6 +627,7 @@ mod tests {
             setup_path: Some(format!("{}.compressed", SETUP_PATH)),
             precompute_path: Some(format!("{}.compressed", PRECOMPUTE_PATH)),
             uncompressed: !UNCOMPRESSED,
+            ..Default::default()
         };
 
         let backend = BlstBackend::new(Some(run_args.into()));

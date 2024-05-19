@@ -30,3 +30,10 @@ rayon = "1.5.1"
 num_cpus = "1.16.0"
 
 blst = "0.3.11"
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "piano"
+harness = false

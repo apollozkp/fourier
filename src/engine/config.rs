@@ -1,4 +1,68 @@
-use crate::{RunArgs, SetupArgs};
+use crate::cli::{RunArgs, SetupArgs};
+
+#[derive(Debug, Clone)]
+pub struct DistributedBackendConfig {
+    pub machine_scale: usize,
+    pub backend: BackendConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct DistributedSetupConfig {
+    pub machine_scale: usize,
+    pub setup: SetupConfig,
+}
+
+impl From<DistributedBackendConfig> for DistributedSetupConfig {
+    fn from(config: DistributedBackendConfig) -> Self {
+        Self {
+            machine_scale: config.machine_scale,
+            setup: config.backend.into(),
+        }
+    }
+}
+
+impl From<SetupArgs> for DistributedSetupConfig {
+    fn from(args: SetupArgs) -> Self {
+        Self {
+            machine_scale: 1,
+            setup: args.into(),
+        }
+    }
+}
+
+impl From<RunArgs> for DistributedBackendConfig {
+    fn from(args: RunArgs) -> Self {
+        Self {
+            machine_scale: args.machines_scale,
+            backend: args.into(),
+        }
+    }
+}
+
+impl From<BackendConfig> for DistributedBackendConfig {
+    fn from(config: BackendConfig) -> Self {
+        Self {
+            machine_scale: 1,
+            backend: config,
+        }
+    }
+}
+
+impl DistributedBackendConfig {
+    pub fn distribution_scale(&self) -> usize {
+        self.machine_scale
+    }
+
+    pub fn config(&self) -> &BackendConfig {
+        &self.backend
+    }
+}
+
+impl Default for DistributedBackendConfig {
+    fn default() -> Self {
+        BackendConfig::default().into()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct BackendConfig {

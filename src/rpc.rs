@@ -9,7 +9,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tracing::{error, info};
 
-use crate::RunArgs;
+use crate::cli::RunArgs;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct JsonRpcRequest {
