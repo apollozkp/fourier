@@ -7,8 +7,8 @@ edition = "2021"
 
 [dependencies]
 # kzg
-kzg = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel"], branch = "optional_compression"}
-rust-kzg-blst = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel", "bgmw"], branch = "optional_compression"}
+kzg = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel"], branch = "piano"}
+rust-kzg-blst = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel", "bgmw"], branch = "piano"}
 
 # kzg = { path = "../rust-kzg/kzg", features = ["parallel"]}
 # rust-kzg-blst = { path = "../rust-kzg/blst", features = ["parallel", "bgmw"]}

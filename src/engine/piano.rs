@@ -16,6 +16,7 @@ use rust_kzg_blst::types::g1::FsG1;
 use rust_kzg_blst::types::g1::FsG1Affine;
 use rust_kzg_blst::types::g2::FsG2;
 use rust_kzg_blst::types::poly::FsPoly;
+use std::io::Write;
 use std::sync::Arc;
 
 type OptionalPrecomputationTable = Option<Arc<PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>>>;
@@ -34,10 +35,7 @@ impl PianoPrecomputation {
         for (i, row) in settings.u.iter().enumerate() {
             u[i] = precompute(row).ok().flatten().map(Arc::new);
         }
-        Ok(PianoPrecomputation {
-            g1_tau_y,
-            u,
-        })
+        Ok(PianoPrecomputation { g1_tau_y, u })
     }
 
     pub fn get_g1_tau_y(&self) -> Option<&PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>> {
@@ -46,6 +44,73 @@ impl PianoPrecomputation {
 
     pub fn get_u(&self, i: usize) -> Option<&PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>> {
         self.u[i].as_ref().map(|v| v.as_ref())
+    }
+
+    /// Load precomputation tables from a file
+    /// The file format is:
+    /// - g1_tau_y
+    /// - size of u
+    /// - u_0
+    /// - u_1
+    /// - ...
+    /// - u_n
+    /// where each u_i is a precomputation table
+    pub fn load_from_file(file_path: &str, compressed: bool) -> Result<Self, String> {
+        use std::io::Read;
+
+        let file = std::fs::File::open(file_path).map_err(|e| e.to_string())?;
+        let mut reader = std::io::BufReader::new(file);
+        let g1_tau_y = PrecomputationTable::read_from_reader(&mut reader, compressed)?;
+        let mut size_bytes = [0u8; 8];
+        reader
+            .read_exact(&mut size_bytes)
+            .map_err(|e| e.to_string())?;
+        let size = u64::from_le_bytes(size_bytes) as usize;
+        let u = (0..size)
+            .map(|_| {
+                PrecomputationTable::read_from_reader(&mut reader, compressed)
+                    .ok()
+                    .map(Arc::new)
+            })
+            .collect();
+        Ok(PianoPrecomputation {
+            g1_tau_y: Some(Arc::new(g1_tau_y)),
+            u,
+        })
+    }
+
+    /// Save precomputation tables to a file
+    /// The file format is:
+    /// - g1_tau_y
+    /// - size of u
+    /// - u_0
+    /// - u_1
+    /// - ...
+    /// - u_n
+    /// where each u_i is a precomputation table
+    pub fn save_to_file(&self, file_path: &str, compressed: bool) -> Result<(), String> {
+        let file = std::fs::File::create(file_path).map_err(|e| e.to_string())?;
+        let mut writer = std::io::BufWriter::new(file);
+
+        if let Some(g1_tau_y) = self.g1_tau_y.as_ref() {
+            g1_tau_y.write_to_writer(&mut writer, compressed)?;
+        } else {
+            return Err("g1_tau_y is missing".to_string());
+        }
+
+        let size = self.u.len() as u64;
+        writer
+            .write_all(&size.to_le_bytes())
+            .map_err(|e| e.to_string())?;
+        for table in self.u.iter() {
+            if let Some(table) = table {
+                table.write_to_writer(&mut writer, compressed)?;
+            } else {
+                return Err("u table is missing".to_string());
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -297,6 +362,17 @@ impl PianoSettings {
             precomputation: PianoPrecomputation::default(),
         })
     }
+
+    pub fn save_precomputation_to_file(&self, file_path: &str, compressed: bool) -> Result<(), String> {
+        self.precomputation.save_to_file(file_path, compressed)
+    }
+
+    pub fn load_precomputation_from_file(
+        &mut self, file_path: &str, compressed: bool,
+    ) -> Result<(), String> {
+        self.precomputation = PianoPrecomputation::load_from_file(file_path, compressed)?;
+        Ok(())
+    }
 }
 
 /// We need to generate the following:
@@ -476,6 +552,7 @@ impl PianoBackend {
             PianoPrecomputation::generate(&piano_settings).unwrap()
         });
         piano_settings.set_precomputation(precomputation);
+
         PianoBackend {
             fft_settings,
             piano_settings,
@@ -1371,6 +1448,27 @@ mod tests {
                 .is_ok());
             let loaded = PianoSettings::load_setup_from_file(FILENAME, compressed).unwrap();
             assert_eq(&backend.piano_settings, &loaded);
+        }
+        let backend = PianoBackend::new(4, 2, &[[0u8; 32usize], [1u8; 32usize]]);
+
+        test_save_load(&backend, true);
+        test_save_load(&backend, false);
+
+        std::fs::remove_file(FILENAME).unwrap();
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn test_save_and_load_precompute() {
+        const FILENAME: &str = "piano_precompute.json";
+        fn assert_eq(a: &PianoPrecomputation, b: &PianoPrecomputation) {
+            // TODO: implement PartialEq for PianoPrecomputation
+            todo!();
+        }
+        fn test_save_load(backend: &PianoBackend, compressed: bool) {
+            assert!(backend.piano_settings.save_precomputation_to_file(FILENAME, compressed).is_ok());
+            let loaded = PianoPrecomputation::load_from_file(FILENAME, compressed).unwrap();
+            assert_eq(backend.piano_settings.get_precomputation(), &loaded);
         }
         let backend = PianoBackend::new(4, 2, &[[0u8; 32usize], [1u8; 32usize]]);
 
