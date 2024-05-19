@@ -1,4 +1,6 @@
 use kzg::eip_4844::hash_to_bls_field;
+use kzg::msm::precompute::precompute;
+use kzg::msm::precompute::PrecomputationTable;
 use kzg::FFTFr;
 use kzg::FFTSettings;
 use kzg::Fr;
@@ -8,21 +10,57 @@ use kzg::Poly;
 use kzg::G1;
 use kzg::G2;
 use rust_kzg_blst::types::fft_settings::FsFFTSettings;
+use rust_kzg_blst::types::fp::FsFp;
 use rust_kzg_blst::types::fr::FsFr;
 use rust_kzg_blst::types::g1::FsG1;
+use rust_kzg_blst::types::g1::FsG1Affine;
 use rust_kzg_blst::types::g2::FsG2;
 use rust_kzg_blst::types::poly::FsPoly;
+use std::sync::Arc;
+
+type OptionalPrecomputationTable = Option<Arc<PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>>>;
+
+#[derive(Debug, Default)]
+pub struct PianoPrecomputation {
+    pub g1_tau_y: OptionalPrecomputationTable,
+
+    pub u: Vec<OptionalPrecomputationTable>,
+}
+
+impl PianoPrecomputation {
+    pub fn generate(settings: &PianoSettings) -> Result<Self, String> {
+        let g1_tau_y = precompute(&settings.g_tau_y).ok().flatten().map(Arc::new);
+        let mut u = vec![None; settings.u.len()];
+        for (i, row) in settings.u.iter().enumerate() {
+            u[i] = precompute(row).ok().flatten().map(Arc::new);
+        }
+        Ok(PianoPrecomputation {
+            g1_tau_y,
+            u,
+        })
+    }
+
+    pub fn get_g1_tau_y(&self) -> Option<&PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>> {
+        self.g1_tau_y.as_ref().map(|v| v.as_ref())
+    }
+
+    pub fn get_u(&self, i: usize) -> Option<&PrecomputationTable<FsFr, FsG1, FsFp, FsG1Affine>> {
+        self.u[i].as_ref().map(|v| v.as_ref())
+    }
+}
 
 #[derive(Debug)]
 pub struct PianoSettings {
     g: FsG1,
-    g_tau_x: Vec<FsG1>,
+    g_tau_x: Vec<FsG1>, //NOTE: this one is never used?
     g_tau_y: Vec<FsG1>,
     u: Vec<Vec<FsG1>>,
 
     g2: FsG2,
     g2_tau_x: FsG2,
     g2_tau_y: FsG2,
+
+    precomputation: PianoPrecomputation,
 }
 
 impl PianoSettings {
@@ -56,6 +94,14 @@ impl PianoSettings {
         self.g2_tau_y
     }
 
+    pub fn set_precomputation(&mut self, precomputation: PianoPrecomputation) {
+        self.precomputation = precomputation;
+    }
+
+    pub fn get_precomputation(&self) -> &PianoPrecomputation {
+        &self.precomputation
+    }
+
     pub fn save_setup_to_file(&self, file_path: &str, compressed: bool) -> Result<(), String> {
         fn write_g1(file: &mut std::fs::File, el: &FsG1, compressed: bool) -> Result<(), String> {
             if compressed {
@@ -80,7 +126,7 @@ impl PianoSettings {
         let mut file = std::fs::File::create(file_path).unwrap();
 
         // Write the G1 generator
-        write_g1(&mut file, &self.g, compressed)?;
+        write_g1(&mut file, &self.g(), compressed)?;
 
         // Write the g^{tau_X}^i
         let encoded_g_tau_x_size = self.g_tau_x.len() as u64;
@@ -247,6 +293,8 @@ impl PianoSettings {
             g2,
             g2_tau_x,
             g2_tau_y,
+
+            precomputation: PianoPrecomputation::default(),
         })
     }
 }
@@ -315,6 +363,8 @@ pub fn generate_trusted_setup(
         g2,
         g2_tau_x,
         g2_tau_y,
+
+        precomputation: PianoPrecomputation::default(),
     }
 }
 
@@ -419,7 +469,13 @@ pub struct PianoBackend {
 impl PianoBackend {
     pub fn new(n: usize, m: usize, secrets: &[[u8; 32usize]; 2]) -> PianoBackend {
         let fft_settings = PianoFFTSettings::new(n, m).unwrap();
-        let piano_settings = generate_trusted_setup(&fft_settings, *secrets);
+        let mut piano_settings = crate::utils::timed("Generating Trusted Setup", || {
+            generate_trusted_setup(&fft_settings, *secrets)
+        });
+        let precomputation = crate::utils::timed("Generating Precomputations", || {
+            PianoPrecomputation::generate(&piano_settings).unwrap()
+        });
+        piano_settings.set_precomputation(precomputation);
         PianoBackend {
             fft_settings,
             piano_settings,
@@ -442,7 +498,7 @@ impl PianoBackend {
                 .collect::<Vec<_>>(),
             &self.fft_settings.fft_left(&poly.coeffs, false)?,
             poly.len(),
-            None,
+            self.piano_settings.get_precomputation().get_u(i),
         );
 
         Ok(out)
@@ -506,7 +562,7 @@ impl PianoBackend {
                 .collect::<Vec<_>>(),
             &self.fft_settings.fft_left(&q_cob, false).unwrap(),
             poly.len(),
-            None,
+            self.piano_settings.get_precomputation().get_u(i),
         );
         Ok((y, out))
     }
@@ -564,7 +620,7 @@ impl PianoBackend {
                 .collect::<Vec<_>>(),
             &q.coeffs,
             q.len(),
-            None,
+            self.piano_settings.get_precomputation().get_g1_tau_y(),
         );
 
         Ok((z, (pi0, pi1)))
@@ -603,7 +659,7 @@ impl PianoBackend {
                 .collect::<Vec<_>>(),
             &right_lagrange_poly.coeffs,
             right_lagrange_poly.len(),
-            None,
+            self.piano_settings.get_precomputation().get_g1_tau_y(),
         );
 
         // Compute g^{y'} = g^{R_i(tau_Y) * y} = (g^{R_i(tau_Y)})^y
@@ -670,7 +726,7 @@ impl PianoBackend {
         z: &FsFr,
         pi_f: &(FsG1, FsG1),
     ) -> bool {
-        let commitment_minux_z = commitment.sub(&self.piano_settings.g.mul(z));
+        let commitment_minux_z = commitment.sub(&self.piano_settings.g().mul(z));
         let g_tau_x_minus_alpha = self
             .piano_settings
             .g2_tau_x()
@@ -1309,12 +1365,15 @@ mod tests {
             assert_eq!(a.u, b.u);
         }
         fn test_save_load(backend: &PianoBackend, compressed: bool) {
-            assert!(backend.piano_settings.save_setup_to_file(FILENAME, compressed).is_ok());
+            assert!(backend
+                .piano_settings
+                .save_setup_to_file(FILENAME, compressed)
+                .is_ok());
             let loaded = PianoSettings::load_setup_from_file(FILENAME, compressed).unwrap();
             assert_eq(&backend.piano_settings, &loaded);
         }
         let backend = PianoBackend::new(4, 2, &[[0u8; 32usize], [1u8; 32usize]]);
-        
+
         test_save_load(&backend, true);
         test_save_load(&backend, false);
 
