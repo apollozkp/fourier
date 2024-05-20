@@ -1613,41 +1613,4 @@ mod tests {
         std::fs::remove_file(FILENAME).unwrap();
     }
 
-    #[test]
-    #[tracing_test::traced_test]
-    fn bench_precompute() {
-        const N: usize = 14;
-        const M: usize = 2;
-        let cfg = DistributedSetupConfig {
-            setup: crate::engine::config::SetupConfig {
-                generate_precompute: true,
-                generate_setup: true,
-                scale: N,
-                ..Default::default()
-            },
-            machine_scale: M,
-        };
-
-        let backend = PianoBackend::setup(cfg).unwrap();
-        let mut backend_without_precompute = backend.clone();
-        backend_without_precompute.piano_settings.precomputation = PianoPrecomputation::default();
-
-        let coeffs = generate_coeffs(N, M);
-        let polynomials = coeffs
-            .iter()
-            .map(|coeffs| FsPoly::from_coeffs(coeffs))
-            .collect::<Vec<_>>();
-
-        crate::utils::timed("Committing with precompute", || {
-            (0..M)
-                .map(|i| backend.commit(i, &polynomials[i]).unwrap())
-                .collect::<Vec<_>>()
-        });
-
-        crate::utils::timed("Committing without precompute", || {
-            (0..M)
-                .map(|i| backend_without_precompute.commit(i, &polynomials[i]).unwrap())
-                .collect::<Vec<_>>()
-        });
-    }
 }
