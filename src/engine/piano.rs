@@ -852,11 +852,8 @@ impl PianoFFTSettings {
         }
 
         let t = n - m;
-        tracing::debug!("initializing FFT settings, left = {}, right = {}", t, m);
         let left = FsFFTSettings::new(t)?;
-        tracing::debug!("left max width {:?}", left.get_max_width());
         let right = FsFFTSettings::new(m)?;
-        tracing::debug!("right max width {:?}", right.get_max_width());
 
         Ok(PianoFFTSettings {
             left,
@@ -1182,6 +1179,29 @@ mod tests {
 
     #[test]
     #[tracing_test::traced_test]
+    fn test_verify_default() {
+        const N: usize = 8;
+        const M: usize = 1;
+        let backend = PianoBackend::new(Some(DistributedBackendConfig {
+            backend: crate::engine::config::BackendConfig {
+                scale: N,
+                ..Default::default()
+            },
+            machine_scale: M,
+        }));
+
+        let i = 0;
+        let commitment = FsG1::default();
+        let alpha = FsFr::rand();
+        let eval = FsFr::zero();
+        let proof = FsG1::default();
+
+        assert!(backend.verify_single(i, &commitment, &alpha, &eval, &proof));
+    }
+
+
+    #[test]
+    #[tracing_test::traced_test]
     fn manual_commit_test() {
         const N: usize = 8;
         const MACHINES: usize = 4;
@@ -1502,6 +1522,77 @@ mod tests {
 
     #[test]
     #[tracing_test::traced_test]
+    fn partial_commit_test() {
+        const N: usize = 8;
+        const M: usize = 2;
+
+        // This test demonstrates that a trusted setup with parameters N and M can also function
+        // when M' < M machines are active. 
+        // We can still generate commitments provided the circuit size is smaller than N' = M' + (N - M).
+        // All that needs to happen is that the data sent to the inactive machines is zeroes out,
+        // so that the individual commitments and proofs become the identity element and therefore
+        // trivially valid.
+
+        const ACTIVE_MACHINES: [usize; 2] = [0, 1];
+
+        let backend = PianoBackend::new(Some(DistributedBackendConfig {
+            backend: crate::engine::config::BackendConfig {
+                scale: N,
+                ..Default::default()
+            },
+            machine_scale: M,
+        }));
+
+        let coeffs = generate_coeffs(N, M);
+
+        let commitments = coeffs
+            .iter()
+            .enumerate()
+            .map(|(i, coeffs)| {
+                if ACTIVE_MACHINES.contains(&i) {
+                    FsG1::default()
+                } else {
+                    let poly = FsPoly::from_coeffs(coeffs);
+                    backend.commit(i, &poly).unwrap()
+                }
+            })
+            .collect::<Vec<_>>();
+
+
+        let master_commitment = backend.master_commit(&commitments);
+
+        let alpha = FsFr::rand();
+        let beta = FsFr::rand();
+
+
+        let proofs = (0..2usize.pow(M as u32))
+            .map(|i| {
+                if ACTIVE_MACHINES.contains(&i) {
+                    (FsFr::zero(), FsG1::default())
+                } else {
+                    tracing::debug!("opening machine {}", i);
+                    let poly = FsPoly::from_coeffs(&coeffs[i]);
+                    backend.open(i, &poly, &alpha).unwrap()
+                }
+            })
+            .collect::<Vec<_>>();
+
+
+        // verify that the commitments are correct
+        for (i, (commitment, (eval, proof))) in commitments.iter().zip(proofs.iter()).enumerate() {
+            assert!(backend.verify_single(i, commitment, &alpha, eval, proof))
+        }
+
+        let (evals, proofs): (Vec<FsFr>, Vec<FsG1>) = proofs.iter().cloned().unzip();
+
+        let (z, pi_f) = backend.master_open(&evals, &proofs, &beta).unwrap();
+
+        assert!(backend.verify(&master_commitment, &beta, &alpha, &z, &pi_f));
+
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
     fn test_save_and_load_setup() {
         const N: usize = 8;
         const M: usize = 2;
@@ -1612,5 +1703,4 @@ mod tests {
 
         std::fs::remove_file(FILENAME).unwrap();
     }
-
 }
