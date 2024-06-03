@@ -452,20 +452,32 @@ pub async fn start_rpc_server(cfg: Config) {
     }
 }
 
+/// If this is your first time running these tests
+/// OR
+/// You have made changes to the constant values below
+/// THEN
+/// You should FIRST run the `setup_and_save` function to generate the setup and precompute
+/// files. 
+/// If these files are not present, the tests will complain.
+/// If the wrong files are presnet, the tests will also complain.
 #[cfg(test)]
 mod tests {
     use kzg::Poly;
     use rust_kzg_blst::types::poly::FsPoly;
 
-    use crate::bipoly::BivariateFsPolynomial;
+    use crate::{bipoly::BivariateFsPolynomial, engine::config::DistributedBackendConfig};
 
     use super::*;
 
     const HOST: &str = "localhost";
     const PORT: usize = 1337;
 
-    const SCALE: usize = 5;
-    const MACHINE_SCALE: usize = 1;
+    const SCALE: usize = 6;
+    const MACHINE_SCALE: usize = 2;
+    const COMPRESSED: bool = false;
+
+    const SETUP_PATH: &str = "test_setup.compressed";
+    const PRECOMPUTE_PATH: &str = "test_precompute.compressed";
 
     #[test]
     #[tracing_test::traced_test]
@@ -487,49 +499,41 @@ mod tests {
         });
     }
 
+    fn test_config() -> DistributedBackendConfig {
+        crate::engine::config::DistributedBackendConfig {
+            machine_scale: MACHINE_SCALE,
+            backend: crate::engine::config::BackendConfig {
+                setup_path: Some(SETUP_PATH.to_owned()),
+                precompute_path: Some(PRECOMPUTE_PATH.to_owned()),
+                scale: SCALE,
+                skip_precompute: false,
+                compressed: COMPRESSED,
+            },
+        }
+    }
+
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn setup_and_save() -> Result<(), String> {
-        let backend_config = crate::engine::config::DistributedBackendConfig {
-            machine_scale: MACHINE_SCALE,
-            backend: crate::engine::config::BackendConfig {
-                setup_path: Some("test_setup.compressed".to_owned()),
-                precompute_path: Some("test_precompute.compressed".to_owned()),
-                scale: SCALE,
-                skip_precompute: false,
-                compressed: true,
-            },
-        };
+        let backend_config = test_config();
 
-        PianoBackend::setup_and_save(&backend_config.into()).unwrap();
+        let mut setup_config = crate::engine::config::DistributedSetupConfig::from(backend_config);
+        setup_config.setup.generate_precompute = true;
+        setup_config.setup.generate_setup = true;
+        setup_config.setup.overwrite = true;
+
+        PianoBackend::setup_and_save(&setup_config).unwrap();
         Ok(())
     }
 
+
     async fn test_backend() -> PianoBackend {
-        let backend_config = crate::engine::config::DistributedBackendConfig {
-            machine_scale: MACHINE_SCALE,
-            backend: crate::engine::config::BackendConfig {
-                setup_path: Some("test_setup.compressed".to_owned()),
-                precompute_path: Some("test_precompute.compressed".to_owned()),
-                scale: SCALE,
-                skip_precompute: false,
-                compressed: true,
-            },
-        };
+        let backend_config = test_config();
         PianoBackend::new(Some(backend_config))
     }
 
     async fn start_test_server(port: usize) {
-        let backend_cfg = crate::engine::config::DistributedBackendConfig {
-            machine_scale: 1,
-            backend: crate::engine::config::BackendConfig {
-                setup_path: Some("test_setup.compressed".to_owned()),
-                precompute_path: Some("test_precompute.compressed".to_owned()),
-                scale: 5,
-                skip_precompute: false,
-                compressed: true,
-            },
-        };
+        let backend_cfg = test_config();
 
         let cfg = Config {
             host: HOST.to_owned(),
