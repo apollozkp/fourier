@@ -33,6 +33,7 @@ blst = "0.3.11"
 
 [dev-dependencies]
 criterion = "0.5.1"
+reqwest = "0.12.4"
 
 [[bench]]
 name = "piano"

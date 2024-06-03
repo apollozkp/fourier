@@ -1,20 +1,23 @@
-use fourier::cli::{RunArgs, SetupArgs, SubCommand};
+use fourier::{
+    cli::{RunArgs, SetupArgs, SubCommand},
+    engine::{config::DistributedSetupConfig, piano::PianoBackend},
+};
 use tracing::error;
 
-use fourier::engine::backend::Backend as _;
-use fourier::engine::blst::BlstBackend as Backend;
+//use fourier::engine::backend::Backend as _;
+//use fourier::engine::blst::BlstBackend as Backend;
 
 use clap::Parser;
 
 pub(crate) fn setup(args: SetupArgs) {
     assert!(args.can_proceed());
-    Backend::setup_and_save(args.into())
+    PianoBackend::setup_and_save(&DistributedSetupConfig::from(args))
         .map_err(|e| error!("{}", e))
         .unwrap();
 }
 
 async fn run_server(args: RunArgs) {
-    fourier::rpc::start_rpc_server::<Backend>(args.into()).await;
+    fourier::rpc::start_rpc_server(args.into()).await;
 }
 
 #[tokio::main]

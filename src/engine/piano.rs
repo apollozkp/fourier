@@ -28,16 +28,63 @@ pub struct PianoBackend {
     pub piano_settings: PianoSettings,
 }
 
+// Utils
 impl PianoBackend {
-    pub fn new(cfg: Option<DistributedBackendConfig>) -> Self {
-        let cfg = cfg.unwrap_or_default().into();
-        Self::setup(cfg).expect("Failed to setup KZGSettings")
+    /// Generate random coefficients for a bivariate polynomial in the Lagrange basis
+    /// f(X, Y) = sum_{i=0}^{M-1} sum_{j=0}^{T-1} f_{i,j} R_i(Y) L_j(X)
+    pub fn random_bivariate_polynomial(&self) -> Vec<Vec<FsFr>> {
+        let machine_count = 2usize.pow(self.fft_settings.m() as u32);
+        let sub_circuit_size = 2usize.pow(self.fft_settings.t() as u32);
+        let mut coeffs = vec![vec![FsFr::zero(); sub_circuit_size]; machine_count];
+        (0..machine_count).for_each(|i| {
+            (0..sub_circuit_size).for_each(|j| {
+                coeffs[i][j] = FsFr::rand();
+            });
+        });
+        coeffs
     }
 
-    pub fn setup(cfg: DistributedSetupConfig) -> Result<Self, String> {
+    /// Generate a random point
+    pub fn random_point(&self) -> FsFr {
+        FsFr::rand()
+    }
+
+    pub fn parse_g1_from_str(&self, s: &str) -> Result<FsG1, String> {
+        let bytes = hex::decode(s).map_err(|e| e.to_string())?;
+        FsG1::from_bytes(&bytes).map_err(|e| e.to_string())
+    }
+
+    pub fn parse_point_from_str(&self, s: &str) -> Result<FsFr, String> {
+        let bytes = hex::decode(s).map_err(|e| e.to_string())?;
+        FsFr::from_bytes(&bytes).map_err(|e| e.to_string())
+    }
+
+    pub fn parse_poly_from_str(&self, s: &[String]) -> Result<FsPoly, String> {
+        let coeffs = s
+            .iter()
+            .map(|s| {
+                let bytes = hex::decode(s).map_err(|e| e.to_string())?;
+                FsFr::from_bytes(&bytes).map_err(|e| e.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(FsPoly::from_coeffs(&coeffs))
+    }
+
+    pub fn evaluate(&self, poly: &FsPoly, x: &FsFr) -> FsFr {
+        poly.eval(x)
+    }
+}
+
+impl PianoBackend {
+    pub fn new(cfg: Option<DistributedBackendConfig>) -> Self {
+        let cfg = cfg.unwrap_or_default();
+        Self::setup(&(cfg.into())).expect("Failed to setup KZGSettings")
+    }
+
+    pub fn setup(cfg: &DistributedSetupConfig) -> Result<Self, String> {
         use crate::utils::timed;
         use rand::Rng;
-        let fft_settings = timed("Creating FFTSettings", || PianoFFTSettings::from(&cfg));
+        let fft_settings = timed("Creating FFTSettings", || PianoFFTSettings::from(cfg));
 
         let mut piano_settings = if cfg.setup.generate_setup() {
             timed("Generating Trusted Setup", || {
@@ -68,6 +115,21 @@ impl PianoBackend {
             fft_settings,
             piano_settings,
         })
+    }
+
+    /// This is a convenience function for setting up the KZG settings and saving them to a file
+    pub fn setup_and_save(cfg: &DistributedSetupConfig) -> Result<(), String> {
+        let mut cfg = cfg.clone();
+        cfg.setup.generate_setup = true;
+        cfg.setup.generate_precompute = true;
+        let backend = Self::setup(&cfg)?;
+        backend
+            .piano_settings
+            .save_setup_to_file(cfg.setup.setup_path(), cfg.setup.compressed())?;
+        backend
+            .piano_settings
+            .save_precomputation_to_file(cfg.setup.precompute_path(), cfg.setup.compressed())?;
+        Ok(())
     }
 
     /// Commit to a polynomial f_i(X) as if we are machine i
@@ -223,14 +285,7 @@ impl PianoBackend {
     /// We have g^{tau_Y}, so we can compute g^{R_i(tau_Y)} and then g^{R_i(tau_Y) * y}
     /// as g^{R_i(tau_Y)}^{y}
     /// Then we validate that e(commitment/ g^{y'}, g) == e(pi, g^{tau_X - alpha})
-    pub fn verify_single(
-        &self,
-        i: usize,
-        commitment: &FsG1,
-        alpha: &FsFr,
-        y: &FsFr,
-        pi: &FsG1,
-    ) -> bool {
+    pub fn verify(&self, i: usize, commitment: &FsG1, alpha: &FsFr, y: &FsFr, pi: &FsG1) -> bool {
         // Compute y' = g^{R_i(tau_Y) * y}
 
         // Get R_i(X) = (omega_Y^i / M) * (X^M - 1) / (X - omega_Y^i) in the standard basis
@@ -306,7 +361,7 @@ impl PianoBackend {
     /// Verify an opening of a polynomial f(X) from any machine
     /// Verify that e(commitment / g^z, g) == e(pi_0, g^{tau_X - alpha}) * e(pi_1, g^{tau_Y - beta})
     /// commitment / g^z = g^{f(tau_X) - z}
-    pub fn verify(
+    pub fn master_verify(
         &self,
         commitment: &FsG1,
         beta: &FsFr,
@@ -537,6 +592,10 @@ impl PianoSettings {
         Ok(())
     }
 
+    /// Save setup to file
+    /// If compressed is true, the elements will be written in compressed form
+    /// There is no indicator in the file to specify if the elements are compressed or not
+    /// So the caller must know if the elements are compressed or not
     pub fn save_setup_to_file(&self, file_path: &str, compressed: bool) -> Result<(), String> {
         fn write_g1(file: &mut std::fs::File, el: &FsG1, compressed: bool) -> Result<(), String> {
             if compressed {
@@ -596,6 +655,9 @@ impl PianoSettings {
         Ok(())
     }
 
+    /// Load setup from file
+    /// If compressed is true, the elements will be read in compressed form
+    /// Fails if compression setting does not match the files'
     pub fn load_setup_from_file(
         file_path: &str,
         compressed: bool,
@@ -733,6 +795,10 @@ impl PianoSettings {
         })
     }
 
+    /// Save precomputation tables to a file
+    /// If compressed is true, the elements will be written in compressed form
+    /// There is no indicator in the file to specify if the elements are compressed or not
+    /// So the caller must know if the elements are compressed or not
     pub fn save_precomputation_to_file(
         &self,
         file_path: &str,
@@ -743,6 +809,9 @@ impl PianoSettings {
         })
     }
 
+    /// Load precomputation tables from a file
+    /// If compressed is true, the elements will be read in compressed form
+    /// Fails if compression setting does not match the files'
     pub fn load_precomputation_from_file(
         &mut self,
         file_path: &str,
@@ -1196,9 +1265,8 @@ mod tests {
         let eval = FsFr::zero();
         let proof = FsG1::default();
 
-        assert!(backend.verify_single(i, &commitment, &alpha, &eval, &proof));
+        assert!(backend.verify(i, &commitment, &alpha, &eval, &proof));
     }
-
 
     #[test]
     #[tracing_test::traced_test]
@@ -1357,44 +1425,44 @@ mod tests {
         assert_eq!(z, z_manual);
     }
 
-    #[test]
-    #[tracing_test::traced_test]
-    fn test_kzg_proof_linearity() {
-        use crate::engine::backend::Backend;
-        use crate::engine::blst::BlstBackend;
-        const SCALE: usize = 5;
-        let cfg = crate::engine::config::BackendConfig::new(None, None, SCALE, None, None);
-        let backend = BlstBackend::new(Some(cfg));
-
-        let coeffs = generate_coeffs(SCALE, 0);
-        let poly = FsPoly::from_coeffs(&coeffs[0]);
-
-        tracing::debug!("normal verification");
-        let x = FsFr::rand();
-        let y = poly.eval(&x);
-        let commitment = backend.commit_to_poly(poly.clone()).unwrap();
-        let proof = backend.compute_proof_single(poly.clone(), x).unwrap();
-        let verify = backend
-            .verify_proof_single(proof, x, y, commitment)
-            .unwrap();
-        assert!(verify);
-        tracing::debug!("normal verification OK");
-
-        tracing::debug!("scaled verification");
-        let scalar = FsFr::rand();
-        let new_y = y.mul(&scalar);
-        let mut new_poly = poly.clone();
-        let new_poly = new_poly
-            .mul(&FsPoly::from_coeffs(&[scalar, FsFr::zero()]), poly.len())
-            .unwrap();
-        let new_commitment = backend.commit_to_poly(new_poly.clone()).unwrap();
-        let new_proof = backend.compute_proof_single(new_poly, x).unwrap();
-        let new_verify = backend
-            .verify_proof_single(new_proof, x, new_y, new_commitment)
-            .unwrap();
-        assert!(new_verify);
-        tracing::debug!("scaled verification OK");
-    }
+    //#[test]
+    //#[tracing_test::traced_test]
+    //fn test_kzg_proof_linearity() {
+    //    use crate::engine::backend::Backend;
+    //    use crate::engine::blst::BlstBackend;
+    //    const SCALE: usize = 5;
+    //    let cfg = crate::engine::config::BackendConfig::new(None, None, SCALE, None, None);
+    //    let backend = BlstBackend::new(Some(cfg));
+    //
+    //    let coeffs = generate_coeffs(SCALE, 0);
+    //    let poly = FsPoly::from_coeffs(&coeffs[0]);
+    //
+    //    tracing::debug!("normal verification");
+    //    let x = FsFr::rand();
+    //    let y = poly.eval(&x);
+    //    let commitment = backend.commit_to_poly(poly.clone()).unwrap();
+    //    let proof = backend.compute_proof_single(poly.clone(), x).unwrap();
+    //    let verify = backend
+    //        .verify_proof_single(proof, x, y, commitment)
+    //        .unwrap();
+    //    assert!(verify);
+    //    tracing::debug!("normal verification OK");
+    //
+    //    tracing::debug!("scaled verification");
+    //    let scalar = FsFr::rand();
+    //    let new_y = y.mul(&scalar);
+    //    let mut new_poly = poly.clone();
+    //    let new_poly = new_poly
+    //        .mul(&FsPoly::from_coeffs(&[scalar, FsFr::zero()]), poly.len())
+    //        .unwrap();
+    //    let new_commitment = backend.commit_to_poly(new_poly.clone()).unwrap();
+    //    let new_proof = backend.compute_proof_single(new_poly, x).unwrap();
+    //    let new_verify = backend
+    //        .verify_proof_single(new_proof, x, new_y, new_commitment)
+    //        .unwrap();
+    //    assert!(new_verify);
+    //    tracing::debug!("scaled verification OK");
+    //}
 
     #[test]
     #[tracing_test::traced_test]
@@ -1480,7 +1548,7 @@ mod tests {
                 let commitment = commitments[i];
                 let (y, pi_0) = proofs[i];
                 tracing::debug!("Checking proof for machine {}", i);
-                let verify = backend.verify_single(i, &commitment, &alpha, &y, &pi_0);
+                let verify = backend.verify(i, &commitment, &alpha, &y, &pi_0);
                 if !verify {
                     tracing::error!("Verification failed for machine {}", i);
                 } else {
@@ -1511,7 +1579,7 @@ mod tests {
 
             // Master Verification
             tracing::debug!("Verifying...");
-            let result = backend.verify(&master_commitment, &beta, &alpha, &z, &pi_f);
+            let result = backend.master_verify(&master_commitment, &beta, &alpha, &z, &pi_f);
             if result {
                 Ok(())
             } else {
@@ -1527,7 +1595,7 @@ mod tests {
         const M: usize = 2;
 
         // This test demonstrates that a trusted setup with parameters N and M can also function
-        // when M' < M machines are active. 
+        // when M' < M machines are active.
         // We can still generate commitments provided the circuit size is smaller than N' = M' + (N - M).
         // All that needs to happen is that the data sent to the inactive machines is zeroes out,
         // so that the individual commitments and proofs become the identity element and therefore
@@ -1558,12 +1626,10 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-
         let master_commitment = backend.master_commit(&commitments);
 
         let alpha = FsFr::rand();
         let beta = FsFr::rand();
-
 
         let proofs = (0..2usize.pow(M as u32))
             .map(|i| {
@@ -1577,18 +1643,16 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-
         // verify that the commitments are correct
         for (i, (commitment, (eval, proof))) in commitments.iter().zip(proofs.iter()).enumerate() {
-            assert!(backend.verify_single(i, commitment, &alpha, eval, proof))
+            assert!(backend.verify(i, commitment, &alpha, eval, proof))
         }
 
         let (evals, proofs): (Vec<FsFr>, Vec<FsG1>) = proofs.iter().cloned().unzip();
 
         let (z, pi_f) = backend.master_open(&evals, &proofs, &beta).unwrap();
 
-        assert!(backend.verify(&master_commitment, &beta, &alpha, &z, &pi_f));
-
+        assert!(backend.master_verify(&master_commitment, &beta, &alpha, &z, &pi_f));
     }
 
     #[test]
@@ -1629,7 +1693,7 @@ mod tests {
             },
             machine_scale: M,
         };
-        let backend = PianoBackend::setup(cfg).unwrap();
+        let backend = PianoBackend::setup(&cfg).unwrap();
 
         test_save_load(&backend, true);
         test_save_load(&backend, false);
@@ -1688,7 +1752,7 @@ mod tests {
             },
             machine_scale: M,
         };
-        let backend = PianoBackend::setup(cfg).unwrap();
+        let backend = PianoBackend::setup(&cfg).unwrap();
 
         let coeffs = generate_coeffs(N, M);
         let polynomials = coeffs

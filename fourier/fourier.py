@@ -1,7 +1,6 @@
 import json
 import subprocess
 import time
-import os
 from typing import List
 
 import requests

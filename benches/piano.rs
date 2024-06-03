@@ -34,7 +34,7 @@ fn prepare() -> (PianoBackend, Vec<FsPoly>) {
             ..Default::default()
         },
     };
-    let backend = PianoBackend::setup(cfg).unwrap();
+    let backend = PianoBackend::setup(&cfg).unwrap();
 
     let lagrange_coeffs = generate_coeffs(N, M);
     // Compute sub-polynomials in standard basis

@@ -42,7 +42,7 @@ impl From<RunArgs> for DistributedBackendConfig {
 impl From<BackendConfig> for DistributedBackendConfig {
     fn from(config: BackendConfig) -> Self {
         Self {
-            machine_scale: 1,
+            machine_scale: 0,
             backend: config,
         }
     }
@@ -58,7 +58,7 @@ impl DistributedBackendConfig {
     }
 }
 
-impl Default for DistributedBackendConfig {
+impl std::default::Default for DistributedBackendConfig {
     fn default() -> Self {
         BackendConfig::default().into()
     }
