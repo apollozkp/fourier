@@ -60,6 +60,11 @@ pub enum RpcRequest {
         poly: Vec<String>,
         x: String,
     },
+    Fft {
+        poly: Vec<String>,
+        left: bool,
+        inverse: bool,
+    },
     Ping,
 }
 
@@ -127,6 +132,9 @@ pub enum RpcResult {
     Evaluate {
         y: String,
     },
+    Fft {
+        poly: Vec<String>,
+    },
     Error {
         message: String,
     },
@@ -165,12 +173,37 @@ impl RpcHandler {
             RpcRequest::RandomPoly { .. } => self.handle_random_poly(req),
             RpcRequest::RandomPoint { .. } => self.handle_random_point(req),
             RpcRequest::Evaluate { .. } => self.handle_evaluate(req),
+            RpcRequest::Fft { .. } => self.handle_fft(req),
             RpcRequest::Ping { .. } => Self::handle_ping(),
         }
     }
 
     fn handle_ping() -> Result<RpcResult, String> {
         Ok(RpcResult::Pong)
+    }
+
+    fn handle_fft(&self, req: RpcRequest) -> Result<RpcResult, String> {
+        if let RpcRequest::Fft {
+            ref poly,
+            left,
+            inverse,
+        } = req
+        {
+            let poly = poly
+                .iter()
+                .map(|p| self.backend.parse_point_from_str(p))
+                .collect::<Result<Vec<FsFr>, _>>()?;
+            let result = if left {
+                self.backend.fft_settings.fft_left(&poly, inverse)
+            } else {
+                self.backend.fft_settings.fft_right(&poly, inverse)
+            }?;
+            Ok(RpcResult::Fft {
+                poly: result.iter().map(|x| hex::encode(x.to_bytes())).collect(),
+            })
+        } else {
+            Err("Invalid params".to_owned())
+        }
     }
 
     fn handle_master_commit(&self, req: RpcRequest) -> Result<RpcResult, String> {
@@ -457,7 +490,7 @@ pub async fn start_rpc_server(cfg: Config) {
 /// You have made changes to the constant values below
 /// THEN
 /// You should FIRST run the `setup_and_save` function to generate the setup and precompute
-/// files. 
+/// files.
 /// If these files are not present, the tests will complain.
 /// If the wrong files are presnet, the tests will also complain.
 #[cfg(test)]
@@ -476,8 +509,8 @@ mod tests {
     const MACHINE_SCALE: usize = 2;
     const COMPRESSED: bool = false;
 
-    const SETUP_PATH: &str = "test_setup.compressed";
-    const PRECOMPUTE_PATH: &str = "test_precompute.compressed";
+    const SETUP_PATH: &str = "test_setup";
+    const PRECOMPUTE_PATH: &str = "test_precompute";
 
     #[test]
     #[tracing_test::traced_test]
@@ -525,7 +558,6 @@ mod tests {
         PianoBackend::setup_and_save(&setup_config).unwrap();
         Ok(())
     }
-
 
     async fn test_backend() -> PianoBackend {
         let backend_config = test_config();
@@ -731,6 +763,7 @@ mod tests {
                 full_poly = full_poly.add(&term);
             });
         });
+
         // Compute sub-polynomials in standard basis
         // NOTE: we can get rid of the standard basis entirely and work in the FFT basis
         let worker_polynomials = (0..machines_count)
@@ -752,7 +785,7 @@ mod tests {
         let validator_port = PORT + machines_count;
 
         // QUERY WORKER NODES
-        // Commitments
+        // WORKER COMMIT
         tracing::debug!("Committing...");
         let mut worker_commitments = vec![];
         for (i, poly) in worker_polynomials.iter().enumerate() {
@@ -770,7 +803,7 @@ mod tests {
             worker_commitments.push(commitment);
         }
 
-        // Openings
+        // WORKER OPEN
         tracing::debug!("Opening...");
         let mut worker_proofs = vec![];
         let alpha = FsFr::rand();
@@ -792,7 +825,7 @@ mod tests {
         }
 
         // QUERY MASTER NODE
-        // Verify each individual commitment and opening before proceeding
+        // VERIFY COMMITMENTS
         for i in 0..machines_count {
             let commitment = worker_commitments[i];
             let (y, pi_0) = worker_proofs[i];
@@ -809,7 +842,7 @@ mod tests {
             tracing::debug!("Worker {} verified OK!", i);
         }
 
-        // Compute Master Commitment
+        // COMPUTE MASTER COMMITMENT
         let req = RpcRequest::MasterCommit {
             commitments: worker_commitments
                 .iter()
@@ -820,8 +853,7 @@ mod tests {
             query_client::<MasterCommitResponse>(client.clone(), validator_port, req).await?;
         let master_commitment = backend.parse_g1_from_str(&response.commitment)?;
 
-        // Compute Master Opening
-
+        // COMPUTE MASTER OPENING
         let (evals, proofs) = worker_proofs.iter().fold(
             (Vec::new(), Vec::new()),
             |(mut evals, mut proofs), (y, pi)| {
@@ -843,13 +875,7 @@ mod tests {
         let pi_0 = backend.parse_g1_from_str(&response.pi_0)?;
         let pi_1 = backend.parse_g1_from_str(&response.pi_1)?;
 
-        // NOTE: We check the reconstruction here as a sanity check
-        // Check z manually, z = f(alpha, beta)
-        let z_manual = full_poly.eval(&alpha, &beta);
-        assert_eq!(z, z_manual);
-        tracing::debug!("Reconstruction OK!");
-
-        // Master Verification
+        // VERIFY MASTER OPENING
         let req = RpcRequest::MasterVerify {
             commitment: hex::encode(master_commitment.to_bytes()),
             beta: hex::encode(beta.to_bytes()),

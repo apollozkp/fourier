@@ -82,6 +82,7 @@ impl PianoBackend {
     }
 
     pub fn setup(cfg: &DistributedSetupConfig) -> Result<Self, String> {
+        tracing::debug!("Setting up PianoBackend with config: {:?}", cfg);
         use crate::utils::timed;
         use rand::Rng;
         let fft_settings = timed("Creating FFTSettings", || PianoFFTSettings::from(cfg));
@@ -119,7 +120,7 @@ impl PianoBackend {
 
     /// This is a convenience function for setting up the KZG settings and saving them to a file
     pub fn setup_and_save(cfg: &DistributedSetupConfig) -> Result<(), String> {
-        let backend = Self::setup(cfg)?;
+        let backend = Self::setup(&cfg)?;
         backend
             .piano_settings
             .save_setup_to_file(cfg.setup.setup_path(), cfg.setup.compressed())?;
