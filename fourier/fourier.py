@@ -3,6 +3,8 @@ import subprocess
 import time
 from typing import List
 
+import os
+
 import requests
 
 DEFAULT_HOST = "127.0.0.1"
@@ -528,8 +530,6 @@ def test_routine(
 
 
 if __name__ == "__main__":
-    import os
-
     os.environ["RUST_LOG"] = "debug"
     HOST = "localhost"
     PORT = 1337
