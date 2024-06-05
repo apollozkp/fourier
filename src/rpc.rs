@@ -388,7 +388,7 @@ impl hyper::service::Service<hyper::Request<hyper::body::Incoming>> for RpcHandl
                     match serde_json::from_reader(whole_body.reader()) {
                         Ok(req) => match handler.handle(req).await {
                             Ok(res) => {
-                                tracing::info!("Sending back response: {:?}", res);
+                                tracing::debug!("Sending back response");
                                 Ok(make_response(res))
                             }
                             Err(err) => {
