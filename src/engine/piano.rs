@@ -138,6 +138,11 @@ impl PianoBackend {
     ///           = g^{R_i(tau_Y) * f_i(tau_X)}
     /// NOTE: We are commiting to R_i(tau_Y) * f_i(X), not f_i(X)
     pub fn commit(&self, i: usize, poly: &FsPoly) -> Result<FsG1, String> {
+        tracing::debug!(
+            "Committing to polynomial f_i(X) of size {} as machine {}",
+            poly.len(),
+            i
+        );
         let mut out = FsG1::default();
         rust_kzg_blst::kzg_proofs::g1_linear_combination(
             &mut out,
@@ -154,6 +159,7 @@ impl PianoBackend {
 
     /// Commit to a polynomial f(X) by combining the commitments of all machines
     pub fn master_commit(&self, commitments: &[FsG1]) -> FsG1 {
+        tracing::debug!("Committing to polynomial f(X) as master");
         let mut out = FsG1::default();
         rust_kzg_blst::kzg_proofs::g1_linear_combination(
             &mut out,
@@ -176,6 +182,11 @@ impl PianoBackend {
     /// So we are actually just opening f'(X) = R_i(tau_Y) * f_i(X)
     /// But we do return f_i(alpha)
     pub fn open(&self, i: usize, poly: &FsPoly, alpha: &FsFr) -> Result<(FsFr, FsG1), String> {
+        tracing::debug!(
+            "Opening polynomial f_i(X) of size {} as machine {}",
+            poly.len(),
+            i
+        );
         // Evaluate the polynomial at alpha
         let y = poly.eval(alpha);
 
@@ -231,6 +242,7 @@ impl PianoBackend {
         proofs: &[FsG1],
         beta: &FsFr,
     ) -> Result<(FsFr, (FsG1, FsG1)), String> {
+        tracing::debug!("Opening polynomial f(X) as master");
         // Compute master proof by adding all the proofs together
         let mut pi0 = FsG1::default();
         rust_kzg_blst::kzg_proofs::g1_linear_combination(
@@ -284,6 +296,7 @@ impl PianoBackend {
     /// as g^{R_i(tau_Y)}^{y}
     /// Then we validate that e(commitment/ g^{y'}, g) == e(pi, g^{tau_X - alpha})
     pub fn verify(&self, i: usize, commitment: &FsG1, alpha: &FsFr, y: &FsFr, pi: &FsG1) -> bool {
+        tracing::debug!("Verifying opening of polynomial f_i(X) as machine {}", i);
         // Compute y' = g^{R_i(tau_Y) * y}
 
         // Get R_i(X) = (omega_Y^i / M) * (X^M - 1) / (X - omega_Y^i) in the standard basis
@@ -367,6 +380,7 @@ impl PianoBackend {
         z: &FsFr,
         pi_f: &(FsG1, FsG1),
     ) -> bool {
+        tracing::debug!("Verifying opening of polynomial f(X) as master");
         let commitment_minux_z = commitment.sub(&self.piano_settings.g().mul(z));
         let g_tau_x_minus_alpha = self
             .piano_settings
@@ -832,6 +846,8 @@ pub fn generate_trusted_setup(
     fft_settings: &PianoFFTSettings,
     secrets: [[u8; 32usize]; 2],
 ) -> PianoSettings {
+    use rayon::prelude::*;
+
     // Generate tau_X, tau_Y
     let tau_x = hash_to_bls_field(&secrets[0]);
     let tau_y = hash_to_bls_field(&secrets[1]);
@@ -842,39 +858,63 @@ pub fn generate_trusted_setup(
     let sub_circuit_size = 2usize.pow(fft_settings.t() as u32);
     let machine_count = 2usize.pow(fft_settings.m() as u32);
 
-    let g_tau_x = (0..sub_circuit_size)
-        .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
-            acc.push(g.mul(&pow));
-            pow = pow.mul(&tau_x);
-            (acc, pow)
-        })
-        .0;
-    let g_tau_y = (0..machine_count)
-        .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
-            acc.push(g.mul(&pow));
-            pow = pow.mul(&tau_y);
-            (acc, pow)
-        })
-        .0;
 
-    let u = (0..machine_count)
-        .map(|i| {
-            (0..sub_circuit_size)
-                .map(|j| {
-                    let r = fft_settings.right_lagrange_poly(i).unwrap();
-                    let l = fft_settings.left_lagrange_poly(j).unwrap();
-                    let r_tau_y = r.eval(&tau_y);
-                    let l_tau_x = l.eval(&tau_x);
-                    g.mul(&r_tau_y.mul(&l_tau_x))
-                })
-                .collect()
-        })
-        .collect();
+    // Generate powers of tau_X, tau_Y in seperate threads
+    // TODO: Can this be further parallelized?
+    tracing::debug!("Generating powers of tau_X for G1");
+    let g_tau_x_handle = std::thread::spawn(move || {
+        (0..sub_circuit_size)
+            .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
+                acc.push(g.mul(&pow));
+                pow = pow.mul(&tau_x);
+                (acc, pow)
+            })
+            .0
+    });
+
+    tracing::debug!("Generating powers of tau_Y for G1");
+    let g_tau_y_handle = std::thread::spawn(move || {
+        (0..machine_count)
+            .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
+                acc.push(g.mul(&pow));
+                pow = pow.mul(&tau_y);
+                (acc, pow)
+            })
+            .0
+    });
+
+    tracing::debug!("Generating U_{{i, j}}");
+    // Generate U_{i, j} = g^{R_i(tau_Y) * L_j(tau_X)}
+    // in a seperate thread and using rayon for further parallelism
+    let fft_settings = fft_settings.clone();
+    let u_handle = std::thread::spawn(move || {
+        (0..machine_count)
+            .into_par_iter()
+            .map(|i| {
+                (0..sub_circuit_size)
+                    .into_par_iter()
+                    .map(|j| {
+                        let r = fft_settings.right_lagrange_poly(i).unwrap();
+                        let l = fft_settings.left_lagrange_poly(j).unwrap();
+                        let r_tau_y = r.eval(&tau_y);
+                        let l_tau_x = l.eval(&tau_x);
+                        g.mul(&r_tau_y.mul(&l_tau_x))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    });
+
+    let g_tau_x = g_tau_x_handle.join().unwrap();
+    let g_tau_y = g_tau_y_handle.join().unwrap();
+    let u = u_handle.join().unwrap();
 
     // G2
     let g2 = rust_kzg_blst::consts::G2_GENERATOR;
 
+    tracing::debug!("Generating powers of tau_X for G2");
     let g2_tau_x = g2.mul(&tau_x);
+    tracing::debug!("Generating powers of tau_Y for G2");
     let g2_tau_y = g2.mul(&tau_y);
 
     PianoSettings {
@@ -903,7 +943,7 @@ pub struct PianoFFTSettings {
 
 impl From<&DistributedSetupConfig> for PianoFFTSettings {
     fn from(config: &DistributedSetupConfig) -> Self {
-        let m = config.machine_scale;
+        let m = config.machines_scale;
         let n = config.setup.scale;
         Self::new(n, m).unwrap()
     }
@@ -1254,7 +1294,7 @@ mod tests {
                 scale: N,
                 ..Default::default()
             },
-            machine_scale: M,
+            machines_scale: M,
         }));
 
         let i = 0;
@@ -1285,7 +1325,7 @@ mod tests {
                 scale: N,
                 ..Default::default()
             },
-            machine_scale: MACHINES,
+            machines_scale: MACHINES,
         };
         let backend = PianoBackend::new(cfg.into());
 
@@ -1497,7 +1537,7 @@ mod tests {
                     scale: n,
                     ..Default::default()
                 },
-                machine_scale: m,
+                machines_scale: m,
             };
             let backend = PianoBackend::new(cfg.into());
 
@@ -1606,7 +1646,7 @@ mod tests {
                 scale: N,
                 ..Default::default()
             },
-            machine_scale: M,
+            machines_scale: M,
         }));
 
         let coeffs = generate_coeffs(N, M);
@@ -1689,7 +1729,7 @@ mod tests {
                 generate_setup: true,
                 ..Default::default()
             },
-            machine_scale: M,
+            machines_scale: M,
         };
         let backend = PianoBackend::setup(&cfg).unwrap();
 
@@ -1748,7 +1788,7 @@ mod tests {
                 scale: N,
                 ..Default::default()
             },
-            machine_scale: M,
+            machines_scale: M,
         };
         let backend = PianoBackend::setup(&cfg).unwrap();
 

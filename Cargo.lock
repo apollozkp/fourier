@@ -457,6 +457,7 @@ dependencies = [
  "hyper-util",
  "kzg",
  "rand",
+ "rayon",
  "reqwest",
  "rust-kzg-blst",
  "serde",

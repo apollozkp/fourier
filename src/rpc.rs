@@ -140,6 +140,25 @@ pub enum RpcResult {
     },
 }
 
+impl RpcResult {
+    pub fn method(&self) -> &str {
+        match self {
+            RpcResult::WorkerCommit { .. } => "WorkerCommit",
+            RpcResult::WorkerOpen { .. } => "WorkerOpen",
+            RpcResult::WorkerVerify { .. } => "WorkerVerify",
+            RpcResult::MasterCommit { .. } => "MasterCommit",
+            RpcResult::MasterOpen { .. } => "MasterOpen",
+            RpcResult::MasterVerify { .. } => "MasterVerify",
+            RpcResult::RandomPoly { .. } => "RandomPoly",
+            RpcResult::RandomPoint { .. } => "RandomPoint",
+            RpcResult::Evaluate { .. } => "Evaluate",
+            RpcResult::Fft { .. } => "Fft",
+            RpcResult::Pong => "Pong",
+            RpcResult::Error { .. } => "Error",
+        }
+    }
+}
+
 pub struct RpcHandler {
     backend: Arc<PianoBackend>,
 }
@@ -383,12 +402,12 @@ impl hyper::service::Service<hyper::Request<hyper::body::Incoming>> for RpcHandl
         let future = async move {
             match req.collect().await {
                 Ok(body) => {
-                    info!("Received request: {:?}", body);
+                    info!("Received request");
                     let whole_body = body.aggregate();
                     match serde_json::from_reader(whole_body.reader()) {
                         Ok(req) => match handler.handle(req).await {
                             Ok(res) => {
-                                tracing::debug!("Sending back response");
+                                tracing::debug!("Sending back response {}", res.method());
                                 Ok(make_response(res))
                             }
                             Err(err) => {
@@ -506,7 +525,7 @@ mod tests {
     const PORT: usize = 1337;
 
     const SCALE: usize = 6;
-    const MACHINE_SCALE: usize = 2;
+    const MACHINES_SCALE: usize = 2;
     const COMPRESSED: bool = false;
 
     const SETUP_PATH: &str = "test_setup";
@@ -534,7 +553,7 @@ mod tests {
 
     fn test_config() -> DistributedBackendConfig {
         crate::engine::config::DistributedBackendConfig {
-            machine_scale: MACHINE_SCALE,
+            machines_scale: MACHINES_SCALE,
             backend: crate::engine::config::BackendConfig {
                 setup_path: Some(SETUP_PATH.to_owned()),
                 precompute_path: Some(PRECOMPUTE_PATH.to_owned()),
@@ -618,10 +637,10 @@ mod tests {
         tracing::debug!("Response: {}", body);
         let response = serde_json::from_str::<Response>(&body).map_err(|e| e.to_string())?;
 
-        assert_eq!(response.poly.len(), 2usize.pow(MACHINE_SCALE as u32));
+        assert_eq!(response.poly.len(), 2usize.pow(MACHINES_SCALE as u32));
         assert_eq!(
             response.poly[0].len(),
-            2usize.pow((SCALE - MACHINE_SCALE) as u32)
+            2usize.pow((SCALE - MACHINES_SCALE) as u32)
         );
 
         Ok(())
@@ -659,7 +678,7 @@ mod tests {
             y: String,
         }
 
-        let size = 2usize.pow((SCALE - MACHINE_SCALE) as u32);
+        let size = 2usize.pow((SCALE - MACHINES_SCALE) as u32);
 
         let poly = (0..size)
             .map(|i| FsFr::from_u64(i as u64))
@@ -745,8 +764,8 @@ mod tests {
         }
 
         // Setup environment
-        let machines_count = 2usize.pow(MACHINE_SCALE as u32);
-        let sub_circuit_size = 2usize.pow((SCALE - MACHINE_SCALE) as u32);
+        let machines_count = 2usize.pow(MACHINES_SCALE as u32);
+        let sub_circuit_size = 2usize.pow((SCALE - MACHINES_SCALE) as u32);
         let backend = test_backend().await;
 
         // Generate the polynomial we'll be working with in the standard basis

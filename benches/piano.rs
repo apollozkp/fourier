@@ -26,7 +26,7 @@ fn prepare() -> (PianoBackend, Vec<FsPoly>) {
     const N: usize = 8;
     const M: usize = 2;
     let cfg = DistributedSetupConfig {
-        machine_scale: M,
+        machines_scale: M,
         setup: SetupConfig {
             scale: N,
             generate_setup: true,
