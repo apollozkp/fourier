@@ -48,11 +48,11 @@ pub struct RunArgs {
 #[derive(Parser, Debug, Default)]
 pub struct SetupArgs {
     // Path to the file where the setup is saved
-    #[clap(long, default_value = "setup")]
+    #[clap(long, default_value = "data/setup")]
     pub setup_path: String,
 
     // Path to the file where the precomputed values are saved
-    #[clap(long, default_value = "precompute")]
+    #[clap(long, default_value = "data/precompute")]
     pub precompute_path: String,
 
     // The scale of the polynomial

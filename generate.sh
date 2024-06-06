@@ -4,7 +4,6 @@
 : "${MACHINES_SCALE:=2}"
 : "${UNCOMPRESSED:=false}"
 : "${OVERWRITE:=false}"
-: "${DEBUG:=false}"
 
 BIN=./target/release/fourier
 
@@ -80,9 +79,6 @@ while [ "$#" -gt 0 ]; do
         -o | --overwrite)
             OVERWRITE=true
             ;;
-        -d | --debug)
-            DEBUG=true
-            ;;
         -*)
             for (( i=1; i<${#1}; i++ )); do
                 case "${1:$i:1}" in
@@ -99,10 +95,6 @@ while [ "$#" -gt 0 ]; do
                         ;;
                     o)
                         OVERWRITE=true
-                        ;;
-                    d)
-                        DEBUG=true
-                        echo "Debug mode enabled"
                         ;;
                     *)
                         echo "Unknown option: ${1:$i:1}"

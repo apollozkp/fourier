@@ -528,8 +528,8 @@ mod tests {
     const MACHINES_SCALE: usize = 2;
     const COMPRESSED: bool = false;
 
-    const SETUP_PATH: &str = "test_setup";
-    const PRECOMPUTE_PATH: &str = "test_precompute";
+    const SETUP_PATH: &str = "data/test_setup";
+    const PRECOMPUTE_PATH: &str = "data/test_precompute";
 
     #[test]
     #[tracing_test::traced_test]

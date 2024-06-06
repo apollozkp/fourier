@@ -10,8 +10,8 @@ import requests
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 1337
 DEFAULT_BIN = "target/release/fourier"
-DEFAULT_SETUP_PATH = "setup"
-DEFAULT_PRECOMPUTE_PATH = "precompute"
+DEFAULT_SETUP_PATH = "data/setup"
+DEFAULT_PRECOMPUTE_PATH = "data/precompute"
 DEFAULT_SKIP_PRECOMPUTE = False
 DEFAULT_UNCOMPRESSED = False
 
@@ -472,8 +472,8 @@ def master_verify(
 def test_routine(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
-    setup_path: str = "test_setup",
-    precompute_path: str = "test_precompute",
+    setup_path: str = "data/test_setup",
+    precompute_path: str = "data/test_precompute",
     uncompressed: bool = True,
     bin: str = "target/release/fourier",
     scale: int = 6,
@@ -533,8 +533,8 @@ if __name__ == "__main__":
     os.environ["RUST_LOG"] = "debug"
     HOST = "localhost"
     PORT = 1337
-    SETUP_PATH = "test_setup"
-    PRECOMPUTE_PATH = "test_precompute"
+    SETUP_PATH = "data/test_setup"
+    PRECOMPUTE_PATH = "data/test_precompute"
     UNCOMPRESSED = True
     BIN = "target/release/fourier"
 
