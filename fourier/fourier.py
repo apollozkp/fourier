@@ -227,10 +227,17 @@ class Client:
         self.host = host
         self.port = port
         self.cli = CLI(bin=bin)
-        self.setup_path = setup_path if os.path.exists(setup_path) else None
-        self.precompute_path = (
-            precompute_path if os.path.exists(precompute_path) else None
-        )
+        if not os.path.exists(bin):
+            print(f"Binary does not exist: {bin}")
+            raise FileNotFoundError
+        if not os.path.exists(setup_path):
+            print(f"Setup path does not exist: {setup_path}")
+            raise FileNotFoundError
+        if not os.path.exists(precompute_path):
+            print(f"Precompute path does not exist: {precompute_path}")
+            raise FileNotFoundError
+        self.setup_path = setup_path
+        self.precompute_path = precompute_path
         self.uncompressed = uncompressed
 
     def endpoint(self):
