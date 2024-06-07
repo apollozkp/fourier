@@ -457,11 +457,31 @@ pub struct PianoPrecomputation {
 
 impl PianoPrecomputation {
     pub fn generate(settings: &PianoSettings) -> Result<Self, String> {
+        use rayon::prelude::*;
+        tracing::debug!("Generating precomputations for g_tau_y");
         let g1_tau_y = precompute(&settings.g_tau_y).ok().flatten().map(Arc::new);
-        let mut u = vec![None; settings.u.len()];
-        for (i, row) in settings.u.iter().enumerate() {
-            u[i] = precompute(row).ok().flatten().map(Arc::new);
-        }
+        tracing::debug!("Generating precomputations for U");
+        let chunk_size = if settings.u.len() < 8 {
+            1
+        } else {
+            settings.u.len() / 8
+        };
+        let u = settings
+            .u
+            .chunks(chunk_size)
+            .enumerate()
+            .flat_map(|(i, chunk)| {
+                tracing::debug!(
+                    "Generating precomputations for U with i in {}..{}",
+                    i * chunk.len(),
+                    (i + 1) * chunk.len()
+                );
+                chunk
+                    .par_iter()
+                    .map(|row| precompute(row).ok().flatten().map(Arc::new))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
         Ok(PianoPrecomputation { g1_tau_y, u })
     }
 
@@ -852,83 +872,150 @@ pub fn generate_trusted_setup(
     let tau_x = hash_to_bls_field(&secrets[0]);
     let tau_y = hash_to_bls_field(&secrets[1]);
 
-    // G1
-    let g = rust_kzg_blst::consts::G1_GENERATOR;
+    std::thread::scope(|s| {
+        // G1
+        tracing::debug!("Generating powers for G1");
+        let g = rust_kzg_blst::consts::G1_GENERATOR;
 
-    let sub_circuit_size = 2usize.pow(fft_settings.t() as u32);
-    let machine_count = 2usize.pow(fft_settings.m() as u32);
+        let sub_circuit_size = 2usize.pow(fft_settings.t() as u32);
+        let machine_count = 2usize.pow(fft_settings.m() as u32);
 
+        let sub_circuit_chunk_size = if sub_circuit_size > 8 {
+            sub_circuit_size / 8
+        } else {
+            1
+        };
 
-    // Generate powers of tau_X, tau_Y in seperate threads
-    // TODO: Can this be further parallelized?
-    tracing::debug!("Generating powers of tau_X for G1");
-    let g_tau_x_handle = std::thread::spawn(move || {
-        (0..sub_circuit_size)
-            .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
-                acc.push(g.mul(&pow));
-                pow = pow.mul(&tau_x);
-                (acc, pow)
-            })
-            .0
-    });
+        let machine_chunk_size = if machine_count > 8 {
+            machine_count / 8
+        } else {
+            1
+        };
 
-    tracing::debug!("Generating powers of tau_Y for G1");
-    let g_tau_y_handle = std::thread::spawn(move || {
-        (0..machine_count)
-            .fold((vec![], FsFr::one()), |(mut acc, mut pow), _| {
-                acc.push(g.mul(&pow));
-                pow = pow.mul(&tau_y);
-                (acc, pow)
-            })
-            .0
-    });
+        // Generate powers of tau_X, tau_Y in seperate threads
+        // TODO: Can this be further parallelized?
+        tracing::debug!("Generating powers of tau_X for G1");
+        let g_tau_x_handle = s.spawn(move || {
+            (0..sub_circuit_size)
+                .fold((vec![], FsFr::one()), |(mut acc, mut pow), i| {
+                    if i % sub_circuit_chunk_size == 0 || i == sub_circuit_size - 1 {
+                        tracing::debug!(
+                            "Generating powers of tau_X for G1: {} ({}%)",
+                            i,
+                            i * 100 / sub_circuit_size
+                        );
+                    }
+                    acc.push(g.mul(&pow));
+                    pow = pow.mul(&tau_x);
+                    (acc, pow)
+                })
+                .0
+        });
 
-    tracing::debug!("Generating U_{{i, j}}");
-    // Generate U_{i, j} = g^{R_i(tau_Y) * L_j(tau_X)}
-    // in a seperate thread and using rayon for further parallelism
-    let fft_settings = fft_settings.clone();
-    let u_handle = std::thread::spawn(move || {
-        (0..machine_count)
-            .into_par_iter()
-            .map(|i| {
-                (0..sub_circuit_size)
-                    .into_par_iter()
-                    .map(|j| {
-                        let r = fft_settings.right_lagrange_poly(i).unwrap();
-                        let l = fft_settings.left_lagrange_poly(j).unwrap();
-                        let r_tau_y = r.eval(&tau_y);
-                        let l_tau_x = l.eval(&tau_x);
-                        g.mul(&r_tau_y.mul(&l_tau_x))
-                    })
+        tracing::debug!("Generating powers of tau_Y for G1");
+        let g_tau_y_handle = s.spawn(move || {
+            (0..machine_count)
+                .fold((vec![], FsFr::one()), |(mut acc, mut pow), i| {
+                    if i % machine_chunk_size == 0 || i == machine_count - 1 {
+                        tracing::debug!(
+                            "Generating powers of tau_Y for G1: {} ({}%)",
+                            i,
+                            i * 100 / machine_count
+                        );
+                    }
+                    acc.push(g.mul(&pow));
+                    pow = pow.mul(&tau_y);
+                    (acc, pow)
+                })
+                .0
+        });
+
+        tracing::debug!("Generating U_{{i, j}}");
+        // Generate U_{i, j} = g^{R_i(tau_Y) * L_j(tau_X)}
+        // in a seperate thread and using rayon for further parallelism
+        tracing::debug!("Computing R_i(tau_Y) for i in 0..{}", machine_count);
+
+        let r = (0..machine_count)
+            .collect::<Vec<_>>()
+            .chunks(machine_chunk_size)
+            .flat_map(|chunk| {
+                tracing::debug!(
+                    "Generating R_i(tau_Y) for machines {}..{} ({}%)",
+                    chunk[0],
+                    chunk[chunk.len() - 1],
+                    chunk[0] * 100 / machine_count
+                );
+                chunk
+                    .par_iter()
+                    .map(|i| fft_settings.right_lagrange_poly(*i).unwrap().eval(&tau_y))
                     .collect::<Vec<_>>()
             })
+            .collect::<Vec<_>>();
+
+        let l = (0..sub_circuit_size)
             .collect::<Vec<_>>()
-    });
+            .chunks(sub_circuit_chunk_size)
+            .flat_map(|chunk| {
+                tracing::debug!(
+                    "Generating L_j(tau_X) for j {}..{} ({}%)",
+                    chunk[0],
+                    chunk[chunk.len() - 1],
+                    chunk[0] * 100 / sub_circuit_size
+                );
+                chunk
+                    .par_iter()
+                    .map(|j| fft_settings.left_lagrange_poly(*j).unwrap().eval(&tau_x))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
 
-    let g_tau_x = g_tau_x_handle.join().unwrap();
-    let g_tau_y = g_tau_y_handle.join().unwrap();
-    let u = u_handle.join().unwrap();
+        tracing::debug!(
+            "Computing U_{{i, j}} for i in 0..{}, j in 0..{}",
+            machine_count,
+            sub_circuit_size
+        );
+        let u_handle = s.spawn(move || {
+            r.iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    tracing::debug!(
+                        "Generating U_{{i, j}} for machine {} ({}%)",
+                        i,
+                        i * 100 / machine_count
+                    );
+                    l.par_iter().map(|l| g.mul(&r.mul(l))).collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        });
 
-    // G2
-    let g2 = rust_kzg_blst::consts::G2_GENERATOR;
+        tracing::debug!("Waiting for threads to finish");
+        let g_tau_x = g_tau_x_handle.join().unwrap();
+        let g_tau_y = g_tau_y_handle.join().unwrap();
+        let u = u_handle.join().unwrap();
 
-    tracing::debug!("Generating powers of tau_X for G2");
-    let g2_tau_x = g2.mul(&tau_x);
-    tracing::debug!("Generating powers of tau_Y for G2");
-    let g2_tau_y = g2.mul(&tau_y);
+        // G2
+        tracing::debug!("Generating powers for G2");
+        let g2 = rust_kzg_blst::consts::G2_GENERATOR;
 
-    PianoSettings {
-        g,
-        g_tau_x,
-        g_tau_y,
-        u,
+        tracing::debug!("Generating powers of tau_X for G2");
+        let g2_tau_x = g2.mul(&tau_x);
+        tracing::debug!("Generating powers of tau_Y for G2");
+        let g2_tau_y = g2.mul(&tau_y);
 
-        g2,
-        g2_tau_x,
-        g2_tau_y,
+        tracing::debug!("Gathering results");
+        PianoSettings {
+            g,
+            g_tau_x,
+            g_tau_y,
+            u,
 
-        precomputation: PianoPrecomputation::default(),
-    }
+            g2,
+            g2_tau_x,
+            g2_tau_y,
+
+            precomputation: PianoPrecomputation::default(),
+        }
+    })
 }
 
 #[derive(Debug, Clone)]

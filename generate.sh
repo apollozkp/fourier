@@ -7,8 +7,8 @@
 
 BIN=./target/release/fourier
 
-# If no parameters are passed, print usage
-if [ "$#" -eq 0 ]; then
+# Display usage
+function usage() {
     echo "Note on logs:"
     echo "export RUST_LOG=info to see logs"
     echo "export RUST_LOG=debug to enable debug mode"
@@ -19,7 +19,7 @@ if [ "$#" -eq 0 ]; then
 	echo "  -u, --uncompressed             Generate uncompressed files"
 	echo "  -o, --overwrite                Overwrite existing files"
 	exit 1
-fi
+}
 
 # Generate file name
 function filename() {
@@ -65,6 +65,9 @@ function generate_files() {
 # Parse parameters
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        -h | --help)
+            usage
+            ;;
         -s | --scale)
             SCALE=$2
             shift
