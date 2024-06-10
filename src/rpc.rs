@@ -534,14 +534,18 @@ mod tests {
     #[test]
     #[tracing_test::traced_test]
     fn test_serialize_deserialize() {
-        const RAW_REQUESTS: [&str; 7] = [
+        const RAW_REQUESTS: [&str; 11] = [
             r#"{"method":"ping"}"#,
-            r#"{"method":"commit","params":{"poly":["1","2","3"]}}"#,
-            r#"{"method":"open","params":{"poly":["1","2","3"],"x":"4"}}"#,
-            r#"{"method":"verify","params":{"proof":"1","x":"2","y":"3","commitment":"4"}}"#,
-            r#"{"method":"randomPoly","params":{"degree":5}}"#,
+            r#"{"method":"randomPoly"}"#,
             r#"{"method":"randomPoint"}"#,
-            r#"{"method":"evaluate","params":{"poly":["1","2","3"],"x":"4"}}"#,
+            r#"{"method":"evaluate","params":{"poly":["123","456"],"x":"789"}}"#,
+            r#"{"method":"workerCommit","params":{"i":0,"poly":["123","456"]}}"#,
+            r#"{"method":"workerOpen","params":{"i":0,"poly":["123","456"],"x":"789"}}"#,
+            r#"{"method":"workerVerify","params":{"i":0,"alpha":"123","proof":"456","eval":"789","commitment":"abc"}}"#,
+            r#"{"method":"masterCommit","params":{"commitments":["123","456"]}}"#,
+            r#"{"method":"masterOpen","params":{"evals":["123","456"],"proofs":["789","abc"],"beta":"def"}}"#,
+            r#"{"method":"masterVerify","params":{"commitment":"123","beta":"456","alpha":"789","z":"abc","pi_0":"def","pi_1":"ghi"}}"#,
+            r#"{"method":"fft","params":{"poly":["123","456"],"left":true,"inverse":false}}"#,
         ];
 
         RAW_REQUESTS.iter().for_each(|raw| {
@@ -555,42 +559,40 @@ mod tests {
         crate::engine::config::DistributedBackendConfig {
             machines_scale: MACHINES_SCALE,
             backend: crate::engine::config::BackendConfig {
-                setup_path: Some(SETUP_PATH.to_owned()),
-                precompute_path: Some(PRECOMPUTE_PATH.to_owned()),
                 scale: SCALE,
                 skip_precompute: false,
                 compressed: COMPRESSED,
+                precompute_path: None,
+                setup_path: None,
             },
         }
     }
 
     #[tokio::test]
     #[tracing_test::traced_test]
-    async fn setup_and_save() -> Result<(), String> {
+    async fn test_setup_and_save() -> Result<(), String> {
         let backend_config = test_config();
 
         let mut setup_config = crate::engine::config::DistributedSetupConfig::from(backend_config);
+        SETUP_PATH.clone_into(&mut setup_config.setup.setup_path);
+        PRECOMPUTE_PATH.clone_into(&mut setup_config.setup.precompute_path);
         setup_config.setup.generate_precompute = true;
         setup_config.setup.generate_setup = true;
         setup_config.setup.overwrite = true;
 
         PianoBackend::setup_and_save(&setup_config).unwrap();
+        
+        // Check that the files were created and delete them
+        let setup_path = setup_config.setup.setup_path.clone();
+        let precompute_path = setup_config.setup.precompute_path.clone();
+        assert!(std::path::Path::new(&setup_path).exists());
+        assert!(std::path::Path::new(&precompute_path).exists());
+        std::fs::remove_file(&setup_path).unwrap();
+        std::fs::remove_file(&precompute_path).unwrap();
         Ok(())
     }
 
-    async fn test_backend() -> PianoBackend {
-        let backend_config = test_config();
-        PianoBackend::new(Some(backend_config))
-    }
-
-    async fn start_test_server(port: usize) {
-        let backend_cfg = test_config();
-
-        let cfg = Config {
-            host: HOST.to_owned(),
-            port,
-            backend: backend_cfg,
-        };
+    async fn start_test_server(cfg: Config) {
         tokio::spawn(async move {
             start_rpc_server(cfg).await;
         });
@@ -600,7 +602,12 @@ mod tests {
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn test_handle_ping() -> Result<(), String> {
-        start_test_server(PORT).await;
+        let cfg = Config {
+            host: HOST.to_owned(),
+            port: PORT,
+            backend: test_config(),
+        };
+        start_test_server(cfg).await;
 
         let req = RpcRequest::Ping;
 
@@ -624,7 +631,13 @@ mod tests {
             poly: Vec<Vec<String>>,
         }
 
-        start_test_server(PORT).await;
+        let cfg = Config {
+            host: HOST.to_owned(),
+            port: PORT,
+            backend: test_config(),
+        };
+        start_test_server(cfg).await;
+
         let req = RpcRequest::RandomPoly;
         let client = reqwest::Client::new();
         let resp = client
@@ -654,7 +667,13 @@ mod tests {
             point: String,
         }
 
-        start_test_server(PORT).await;
+        let cfg = Config {
+            host: HOST.to_owned(),
+            port: PORT,
+            backend: test_config(),
+        };
+        start_test_server(cfg).await;
+
         let req = RpcRequest::RandomPoint;
         let client = reqwest::Client::new();
         let resp = client
@@ -689,7 +708,13 @@ mod tests {
             .rev()
             .fold(FsFr::zero(), |acc, p| acc.mul(&x).add(p));
 
-        start_test_server(PORT).await;
+        let cfg = Config {
+            host: HOST.to_owned(),
+            port: PORT,
+            backend: test_config(),
+        };
+        start_test_server(cfg).await;
+
         let req = RpcRequest::Evaluate {
             poly: poly.iter().map(|x| hex::encode(x.to_bytes())).collect(),
             x: hex::encode(x.to_bytes()),
@@ -711,6 +736,23 @@ mod tests {
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn test_worker_commit_open_verify() -> Result<(), String> {
+
+        // Create setup files
+        const SETUP_PATH: &str = "test_pipeline_setup";
+        const PRECOMPUTE_PATH: &str = "test_pipeline_precompute";
+        let mut test_config = test_config();
+        test_config.backend.precompute_path = Some(PRECOMPUTE_PATH.to_owned());
+        test_config.backend.setup_path = Some(SETUP_PATH.to_owned());
+
+        let mut test_setup_config = crate::engine::config::DistributedSetupConfig::from(test_config.clone());
+        test_setup_config.setup.generate_setup = true;
+        test_setup_config.setup.generate_precompute = true;
+        SETUP_PATH.clone_into(&mut test_setup_config.setup.setup_path);
+        PRECOMPUTE_PATH.clone_into(&mut test_setup_config.setup.precompute_path);
+        test_setup_config.setup.overwrite = true;
+        PianoBackend::setup_and_save(&test_setup_config).unwrap();
+
+
         #[derive(Debug, Serialize, Deserialize)]
         struct WorkerCommitResponse {
             commitment: String,
@@ -766,7 +808,7 @@ mod tests {
         // Setup environment
         let machines_count = 2usize.pow(MACHINES_SCALE as u32);
         let sub_circuit_size = 2usize.pow((SCALE - MACHINES_SCALE) as u32);
-        let backend = test_backend().await;
+        let backend = PianoBackend::new(Some(test_config.clone()));
 
         // Generate the polynomial we'll be working with in the standard basis
         // f(x, y) = sum_{i=0}^{n} sum_{j=0}^{m} f_{i,j} L(j) R(i)
@@ -799,7 +841,13 @@ mod tests {
         // This is not strictly necessary since all servers have the same setup, but good practice
         // for testing
         for i in 0..machines_count + 1 {
-            start_test_server(PORT + i).await;
+            let cfg = Config {
+                host: HOST.to_owned(),
+                port: PORT + i,
+                backend: test_config.clone(),
+            };
+
+            start_test_server(cfg).await;
         }
         let validator_port = PORT + machines_count;
 
