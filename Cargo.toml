@@ -6,12 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-# kzg
-kzg = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel"], branch = "precompute_to_file"}
-rust-kzg-blst = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel", "bgmw"], branch = "precompute_to_file"}
 
-# kzg = { path = "../rust-kzg/kzg", features = ["parallel"]}
-# rust-kzg-blst = { path = "../rust-kzg/blst", features = ["parallel", "bgmw"]}
+# kzg
+kzg = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel"], branch = "piano"}
+rust-kzg-blst = { git = "https://github.com/apollozkp/rust-kzg.git", features = ["parallel", "bgmw"], branch = "piano"}
+
 # rpc
 tokio = { version = "1.37", features = ["macros", "full"] }
 tracing = "0.1.40"
@@ -25,6 +24,14 @@ http-body-util = "0.1.1"
 tracing-subscriber = "0.3.18"
 clap = { version = "4.5.4", features = ["derive"] }
 rand = "0.8"
-rayon = "1.5.1"
+rayon = "1.10.0"
 
-num_cpus = "1.16.0"
+blst = "0.3.11"
+
+[dev-dependencies]
+criterion = "0.5.1"
+reqwest = "0.12.4"
+
+[[bench]]
+name = "piano"
+harness = false
