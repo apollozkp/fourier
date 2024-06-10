@@ -46,6 +46,10 @@ function generate_files() {
 	local setup_file_name=$(filename setup $scale $machines_scale $ext)
 	local precompute_file_name=$(filename precompute $scale $machines_scale $ext)
 
+    # Check if directories in path of setup_file_name and precompute_file_name exist
+    mkdir -p $(dirname $setup_file_name)
+    mkdir -p $(dirname $precompute_file_name)
+
     # Set arguments
 	local args="--scale $scale --machines-scale $machines_scale"
     args="$args --setup-path $setup_file_name --precompute-path $precompute_file_name"
