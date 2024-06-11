@@ -28,6 +28,9 @@ pub struct PianoBackend {
     pub piano_settings: PianoSettings,
 }
 
+use base64::Engine;
+use crate::utils::B64ENGINE;
+
 // Utils
 impl PianoBackend {
     /// Generate random coefficients for a bivariate polynomial in the Lagrange basis
@@ -50,12 +53,12 @@ impl PianoBackend {
     }
 
     pub fn parse_g1_from_str(&self, s: &str) -> Result<FsG1, String> {
-        let bytes = hex::decode(s).map_err(|e| e.to_string())?;
+        let bytes = B64ENGINE.decode(s.as_bytes()).map_err(|e| e.to_string())?;
         FsG1::from_bytes(&bytes).map_err(|e| e.to_string())
     }
 
     pub fn parse_point_from_str(&self, s: &str) -> Result<FsFr, String> {
-        let bytes = hex::decode(s).map_err(|e| e.to_string())?;
+        let bytes = B64ENGINE.decode(s.as_bytes()).map_err(|e| e.to_string())?;
         FsFr::from_bytes(&bytes).map_err(|e| e.to_string())
     }
 
@@ -63,7 +66,7 @@ impl PianoBackend {
         let coeffs = s
             .iter()
             .map(|s| {
-                let bytes = hex::decode(s).map_err(|e| e.to_string())?;
+                let bytes = B64ENGINE.decode(s.as_bytes()).map_err(|e| e.to_string())?;
                 FsFr::from_bytes(&bytes).map_err(|e| e.to_string())
             })
             .collect::<Result<Vec<_>, _>>()?;

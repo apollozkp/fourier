@@ -11,6 +11,8 @@ use tracing::{debug, warn};
 
 use crate::engine::config::{BackendConfig, SetupConfig};
 
+use crate::utils::B64ENGINE;
+
 pub enum PrecomputeInstruction {
     Skip,
     Generate,
@@ -221,19 +223,19 @@ impl crate::engine::backend::Backend for BlstBackend {
     }
 
     fn parse_point_from_str(&self, s: &str) -> Result<Self::Fr, String> {
-        Fr::from_bytes(hex::decode(s).map_err(|e| e.to_string())?.as_slice())
+        Fr::from_bytes(B64ENGINE.decode(s).map_err(|e| e.to_string())?.as_slice())
     }
 
     fn parse_poly_from_str(&self, s: &[String]) -> Result<Self::Poly, String> {
         Ok(Self::Poly::from_coeffs(
             &s.iter()
-                .map(|x| Fr::from_bytes(hex::decode(x).map_err(|e| e.to_string())?.as_slice()))
+                .map(|x| Fr::from_bytes(B64ENGINE.decode(x).map_err(|e| e.to_string())?.as_slice()))
                 .collect::<Result<Vec<Self::Fr>, String>>()?,
         ))
     }
 
     fn parse_g1_from_str(&self, s: &str) -> Result<Self::G1, String> {
-        G1::from_bytes(hex::decode(s).map_err(|e| e.to_string())?.as_slice())
+        G1::from_bytes(B64ENGINE.decode(s).map_err(|e| e.to_string())?.as_slice())
     }
 
     fn random_poly(&self, degree: usize) -> Self::Poly {
@@ -289,7 +291,6 @@ impl crate::engine::backend::Backend for BlstBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::RunArgs;
     use crate::cli::SetupArgs;
     use crate::engine::backend::Backend;
     use kzg::Fr;
@@ -423,24 +424,24 @@ mod tests {
         let x = backend
             .parse_point_from_str(TEST_POINT)
             .expect("Failed to parse point");
-        debug!("x: {:?}", hex::encode(x.to_bytes()));
+        debug!("x: {:?}", B64ENGINE.encode(x.to_bytes()));
 
         let y = poly.eval(&x);
         let expected = backend
             .parse_point_from_str(TEST_EVAL)
             .expect("Failed to parse point");
-        debug!("y: {:?}", hex::encode(y.to_bytes()));
+        debug!("y: {:?}", B64ENGINE.encode(y.to_bytes()));
         assert_eq!(y, expected);
 
         let commitment = backend
             .commit_to_poly(poly.clone())
             .expect("Failed to commit to poly");
-        debug!("commitment hex: {:?}", hex::encode(commitment.to_bytes()));
+        debug!("commitment encoded: {:?}", B64ENGINE.encode(commitment.to_bytes()));
 
         let proof = backend
             .compute_proof_single(poly.clone(), x)
             .expect("Failed to compute proof");
-        debug!("proof hex: {:?}", hex::encode(proof.to_bytes()));
+        debug!("proof encoded: {:?}", B64ENGINE.encode(proof.to_bytes()));
 
         let result = backend
             .verify_proof_single(proof, x, y, commitment)

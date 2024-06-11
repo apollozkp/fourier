@@ -448,10 +448,10 @@ dependencies = [
 name = "fourier"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "blst",
  "clap",
  "criterion",
- "hex",
  "http-body-util",
  "hyper",
  "hyper-util",

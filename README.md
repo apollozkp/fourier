@@ -49,8 +49,8 @@ client.ping()
 ### Commit
 Compute a commitment to a polynomial.
 ```python
-# hex encoded coefficients of polynomial
-poly = ["123...efg", ..., "123...efg"]
+# base64 encoded coefficients of polynomial
+poly = ["AQB...", ..., "AQB..."]
 client.commit(poly=poly)
 # {'jsonrpc': '2.0', 'result': {'commitment': '123...efg'}, 'id': 1}
 ```
@@ -58,10 +58,10 @@ client.commit(poly=poly)
 ### Open
 Open a polynomial at a point.
 ```python
-# hex encoded coefficients of polynomial
-poly = ["123...efg", ..., "123...efg"]
-# hex encoded point
-x = "123...efg"
+# base64 encoded coefficients of polynomial
+poly = ["AQB...", ..., "AQB..."]
+# base64 encoded point
+x = "AQB..."
 client.open(poly=poly, x=x)
 # {'jsonrpc': '2.0', 'result': {'proof': '123...efg'}, 'id': 1}
 ```
@@ -69,14 +69,14 @@ client.open(poly=poly, x=x)
 ### Verify
 Verify a proof of polynomial at a point.
 ```python
-# hex encoded proof
-proof = "123...efg"
-# hex encoded point
-x = "123...efg"
-# hex encoded value of polynomial at x
-y = "123...efg"
-# hex encoded commitment
-commitment = "123...efg"
+# base64 encoded proof
+proof = "AQB..."
+# base64 encoded point
+x = "AQB..."
+# base64 encoded value of polynomial at x
+y = "AQB..."
+# base64 encoded commitment
+commitment = "AQB..."
 client.verify(proof=proof, x=x, y=y, commitment=commitment)
 # {'jsonrpc': '2.0', {'valid': True}, 'id': 1}
 ```

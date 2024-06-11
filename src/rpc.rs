@@ -1,3 +1,4 @@
+use base64::Engine;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Buf, Bytes};
 use hyper::Response;
@@ -12,6 +13,7 @@ use tracing::{error, info};
 
 use crate::cli::RunArgs;
 use crate::engine::piano::PianoBackend;
+use crate::utils::B64ENGINE;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params")]
@@ -218,7 +220,7 @@ impl RpcHandler {
                 self.backend.fft_settings.fft_right(&poly, inverse)
             }?;
             Ok(RpcResult::Fft {
-                poly: result.iter().map(|x| hex::encode(x.to_bytes())).collect(),
+                poly: result.iter().map(|x| B64ENGINE.encode(x.to_bytes())).collect(),
             })
         } else {
             Err("Invalid params".to_owned())
@@ -233,7 +235,7 @@ impl RpcHandler {
                 .collect::<Result<Vec<FsG1>, _>>()?;
             let commitment = self.backend.master_commit(&commitments);
             Ok(RpcResult::MasterCommit {
-                commitment: hex::encode(commitment.to_bytes()),
+                commitment: B64ENGINE.encode(commitment.to_bytes()),
             })
         } else {
             Err("Invalid params".to_owned())
@@ -259,9 +261,9 @@ impl RpcHandler {
             let beta = self.backend.parse_point_from_str(beta)?;
             let (eval, (proof_0, proof_1)) = self.backend.master_open(&evals, &proofs, &beta)?;
             Ok(RpcResult::MasterOpen {
-                z: hex::encode(eval.to_bytes()),
-                pi_0: hex::encode(proof_0.to_bytes()),
-                pi_1: hex::encode(proof_1.to_bytes()),
+                z: B64ENGINE.encode(eval.to_bytes()),
+                pi_0: B64ENGINE.encode(proof_0.to_bytes()),
+                pi_1: B64ENGINE.encode(proof_1.to_bytes()),
             })
         } else {
             Err("Invalid params".to_owned())
@@ -299,7 +301,7 @@ impl RpcHandler {
             let poly = self.backend.parse_poly_from_str(poly)?;
             let commitment = self.backend.commit(i, &poly)?;
             Ok(RpcResult::WorkerCommit {
-                commitment: hex::encode(commitment.to_bytes()),
+                commitment: B64ENGINE.encode(commitment.to_bytes()),
             })
         } else {
             Err("Invalid params".to_owned())
@@ -315,8 +317,8 @@ impl RpcHandler {
             let x = self.backend.parse_point_from_str(x)?;
             let (eval, proof) = self.backend.open(i, &poly, &x)?;
             Ok(RpcResult::WorkerOpen {
-                proof: hex::encode(proof.to_bytes()),
-                eval: hex::encode(eval.to_bytes()),
+                proof: B64ENGINE.encode(proof.to_bytes()),
+                eval: B64ENGINE.encode(eval.to_bytes()),
             })
         } else {
             Err("Invalid params".to_owned())
@@ -350,7 +352,7 @@ impl RpcHandler {
             Ok(RpcResult::RandomPoly {
                 poly: poly
                     .iter()
-                    .map(|p| p.iter().map(|x| hex::encode(x.to_bytes())).collect())
+                    .map(|p| p.iter().map(|x| B64ENGINE.encode(x.to_bytes())).collect())
                     .collect(),
             })
         } else {
@@ -362,7 +364,7 @@ impl RpcHandler {
         if let RpcRequest::RandomPoint = req {
             let point = self.backend.random_point();
             Ok(RpcResult::RandomPoint {
-                point: hex::encode(point.to_bytes()),
+                point: B64ENGINE.encode(point.to_bytes()),
             })
         } else {
             Err("Invalid params".to_owned())
@@ -378,7 +380,7 @@ impl RpcHandler {
             let x = self.backend.parse_point_from_str(x)?;
             let y = self.backend.evaluate(&poly, &x);
             Ok(RpcResult::Evaluate {
-                y: hex::encode(y.to_bytes()),
+                y: B64ENGINE.encode(y.to_bytes()),
             })
         } else {
             Err("Invalid params".to_owned())
@@ -528,8 +530,8 @@ mod tests {
     const MACHINES_SCALE: usize = 2;
     const COMPRESSED: bool = false;
 
-    const SETUP_PATH: &str = "data/test_setup";
-    const PRECOMPUTE_PATH: &str = "data/test_precompute";
+    const SETUP_PATH: &str = "test_setup";
+    const PRECOMPUTE_PATH: &str = "test_precompute";
 
     #[test]
     #[tracing_test::traced_test]
@@ -667,6 +669,8 @@ mod tests {
             point: String,
         }
 
+        let dummy_point = FsFr::zero();
+
         let cfg = Config {
             host: HOST.to_owned(),
             port: PORT,
@@ -685,7 +689,7 @@ mod tests {
         let body = resp.text().await.map_err(|e| e.to_string())?;
         tracing::debug!("Response: {}", body);
         let point = serde_json::from_str::<Response>(&body).map_err(|e| e.to_string())?;
-        assert_eq!(point.point.len(), 64);
+        assert_eq!(point.point.len(), B64ENGINE.encode(dummy_point.to_bytes()).len());
         Ok(())
     }
 
@@ -716,8 +720,8 @@ mod tests {
         start_test_server(cfg).await;
 
         let req = RpcRequest::Evaluate {
-            poly: poly.iter().map(|x| hex::encode(x.to_bytes())).collect(),
-            x: hex::encode(x.to_bytes()),
+            poly: poly.iter().map(|x| B64ENGINE.encode(x.to_bytes())).collect(),
+            x: B64ENGINE.encode(x.to_bytes()),
         };
         let client = reqwest::Client::new();
         let resp = client
@@ -729,7 +733,7 @@ mod tests {
         let body = resp.text().await.map_err(|e| e.to_string())?;
         tracing::debug!("Response: {}", body);
         let response = serde_json::from_str::<Response>(&body).map_err(|e| e.to_string())?;
-        assert_eq!(response.y, hex::encode(y.to_bytes()));
+        assert_eq!(response.y, B64ENGINE.encode(y.to_bytes()));
         Ok(())
     }
 
@@ -861,7 +865,7 @@ mod tests {
                 poly: poly
                     .coeffs
                     .iter()
-                    .map(|x| hex::encode(x.to_bytes()))
+                    .map(|x| B64ENGINE.encode(x.to_bytes()))
                     .collect(),
             };
             let response =
@@ -880,9 +884,9 @@ mod tests {
                 poly: poly
                     .coeffs
                     .iter()
-                    .map(|x| hex::encode(x.to_bytes()))
+                    .map(|x| B64ENGINE.encode(x.to_bytes()))
                     .collect(),
-                x: hex::encode(alpha.to_bytes()),
+                x: B64ENGINE.encode(alpha.to_bytes()),
             };
             let response =
                 query_client::<WorkerOpenResponse>(client.clone(), PORT + i, req).await?;
@@ -898,10 +902,10 @@ mod tests {
             let (y, pi_0) = worker_proofs[i];
             let req = RpcRequest::WorkerVerify {
                 i,
-                alpha: hex::encode(alpha.to_bytes()),
-                proof: hex::encode(pi_0.to_bytes()),
-                eval: hex::encode(y.to_bytes()),
-                commitment: hex::encode(commitment.to_bytes()),
+                alpha: B64ENGINE.encode(alpha.to_bytes()),
+                proof: B64ENGINE.encode(pi_0.to_bytes()),
+                eval: B64ENGINE.encode(y.to_bytes()),
+                commitment: B64ENGINE.encode(commitment.to_bytes()),
             };
             let response =
                 query_client::<WorkerVerifyResponse>(client.clone(), validator_port, req).await?;
@@ -913,7 +917,7 @@ mod tests {
         let req = RpcRequest::MasterCommit {
             commitments: worker_commitments
                 .iter()
-                .map(|c| hex::encode(c.to_bytes()))
+                .map(|c| B64ENGINE.encode(c.to_bytes()))
                 .collect(),
         };
         let response =
@@ -931,9 +935,9 @@ mod tests {
         );
         let beta = FsFr::rand();
         let req = RpcRequest::MasterOpen {
-            evals: evals.iter().map(|e| hex::encode(e.to_bytes())).collect(),
-            proofs: proofs.iter().map(|p| hex::encode(p.to_bytes())).collect(),
-            beta: hex::encode(beta.to_bytes()),
+            evals: evals.iter().map(|e| B64ENGINE.encode(e.to_bytes())).collect(),
+            proofs: proofs.iter().map(|p| B64ENGINE.encode(p.to_bytes())).collect(),
+            beta: B64ENGINE.encode(beta.to_bytes()),
         };
         let response =
             query_client::<MasterOpenResponse>(client.clone(), validator_port, req).await?;
@@ -944,12 +948,12 @@ mod tests {
 
         // VERIFY MASTER OPENING
         let req = RpcRequest::MasterVerify {
-            commitment: hex::encode(master_commitment.to_bytes()),
-            beta: hex::encode(beta.to_bytes()),
-            alpha: hex::encode(alpha.to_bytes()),
-            z: hex::encode(z.to_bytes()),
-            pi_0: hex::encode(pi_0.to_bytes()),
-            pi_1: hex::encode(pi_1.to_bytes()),
+            commitment: B64ENGINE.encode(master_commitment.to_bytes()),
+            beta: B64ENGINE.encode(beta.to_bytes()),
+            alpha: B64ENGINE.encode(alpha.to_bytes()),
+            z: B64ENGINE.encode(z.to_bytes()),
+            pi_0: B64ENGINE.encode(pi_0.to_bytes()),
+            pi_1: B64ENGINE.encode(pi_1.to_bytes()),
         };
         let response =
             query_client::<MasterVerifyResponse>(client.clone(), validator_port, req).await?;
