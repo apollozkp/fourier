@@ -220,7 +220,10 @@ impl RpcHandler {
                 self.backend.fft_settings.fft_right(&poly, inverse)
             }?;
             Ok(RpcResult::Fft {
-                poly: result.iter().map(|x| B64ENGINE.encode(x.to_bytes())).collect(),
+                poly: result
+                    .iter()
+                    .map(|x| B64ENGINE.encode(x.to_bytes()))
+                    .collect(),
             })
         } else {
             Err("Invalid params".to_owned())
@@ -298,8 +301,12 @@ impl RpcHandler {
 
     fn handle_worker_commit(&self, req: RpcRequest) -> Result<RpcResult, String> {
         if let RpcRequest::WorkerCommit { i, ref poly, .. } = req {
-            let poly = self.backend.parse_poly_from_str(poly)?;
-            let commitment = self.backend.commit(i, &poly)?;
+            //let poly = self.backend.parse_poly_from_str(poly)?;
+            let coeffs = poly
+                .iter()
+                .map(|x| self.backend.parse_point_from_str(x))
+                .collect::<Result<Vec<FsFr>, _>>()?;
+            let commitment = self.backend.worker_commit(i, &coeffs)?;
             Ok(RpcResult::WorkerCommit {
                 commitment: B64ENGINE.encode(commitment.to_bytes()),
             })
@@ -313,9 +320,12 @@ impl RpcHandler {
             i, ref poly, ref x, ..
         } = req
         {
-            let poly = self.backend.parse_poly_from_str(poly)?;
+            let coeffs = poly
+                .iter()
+                .map(|x| self.backend.parse_point_from_str(x))
+                .collect::<Result<Vec<FsFr>, _>>()?;
             let x = self.backend.parse_point_from_str(x)?;
-            let (eval, proof) = self.backend.open(i, &poly, &x)?;
+            let (eval, proof) = self.backend.worker_open(i, &coeffs, &x)?;
             Ok(RpcResult::WorkerOpen {
                 proof: B64ENGINE.encode(proof.to_bytes()),
                 eval: B64ENGINE.encode(eval.to_bytes()),
@@ -339,7 +349,9 @@ impl RpcHandler {
             let alpha = self.backend.parse_point_from_str(alpha)?;
             let eval = self.backend.parse_point_from_str(eval)?;
             let commitment = self.backend.parse_g1_from_str(commitment)?;
-            let valid = self.backend.verify(i, &commitment, &alpha, &eval, &proof);
+            let valid = self
+                .backend
+                .worker_verify(i, &commitment, &alpha, &eval, &proof);
             Ok(RpcResult::WorkerVerify { valid })
         } else {
             Err("Invalid params".to_owned())
@@ -501,8 +513,10 @@ impl Server {
 
 pub async fn start_rpc_server(cfg: Config) {
     let server = Server::new(cfg);
-    if let Err(e) = server.run().await {
-        error!("Error: {}", e);
+    while let Err(e) = server.run().await {
+        tracing::error!("Error: {}", e);
+        tracing::info!("Error starting server, retrying in 2 seconds...");
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
     }
 }
 
@@ -583,7 +597,7 @@ mod tests {
         setup_config.setup.overwrite = true;
 
         PianoBackend::setup_and_save(&setup_config).unwrap();
-        
+
         // Check that the files were created and delete them
         let setup_path = setup_config.setup.setup_path.clone();
         let precompute_path = setup_config.setup.precompute_path.clone();
@@ -689,7 +703,10 @@ mod tests {
         let body = resp.text().await.map_err(|e| e.to_string())?;
         tracing::debug!("Response: {}", body);
         let point = serde_json::from_str::<Response>(&body).map_err(|e| e.to_string())?;
-        assert_eq!(point.point.len(), B64ENGINE.encode(dummy_point.to_bytes()).len());
+        assert_eq!(
+            point.point.len(),
+            B64ENGINE.encode(dummy_point.to_bytes()).len()
+        );
         Ok(())
     }
 
@@ -720,7 +737,10 @@ mod tests {
         start_test_server(cfg).await;
 
         let req = RpcRequest::Evaluate {
-            poly: poly.iter().map(|x| B64ENGINE.encode(x.to_bytes())).collect(),
+            poly: poly
+                .iter()
+                .map(|x| B64ENGINE.encode(x.to_bytes()))
+                .collect(),
             x: B64ENGINE.encode(x.to_bytes()),
         };
         let client = reqwest::Client::new();
@@ -740,7 +760,6 @@ mod tests {
     #[tokio::test]
     #[tracing_test::traced_test]
     async fn test_worker_commit_open_verify() -> Result<(), String> {
-
         // Create setup files
         const SETUP_PATH: &str = "test_pipeline_setup";
         const PRECOMPUTE_PATH: &str = "test_pipeline_precompute";
@@ -748,14 +767,14 @@ mod tests {
         test_config.backend.precompute_path = Some(PRECOMPUTE_PATH.to_owned());
         test_config.backend.setup_path = Some(SETUP_PATH.to_owned());
 
-        let mut test_setup_config = crate::engine::config::DistributedSetupConfig::from(test_config.clone());
+        let mut test_setup_config =
+            crate::engine::config::DistributedSetupConfig::from(test_config.clone());
         test_setup_config.setup.generate_setup = true;
         test_setup_config.setup.generate_precompute = true;
         SETUP_PATH.clone_into(&mut test_setup_config.setup.setup_path);
         PRECOMPUTE_PATH.clone_into(&mut test_setup_config.setup.precompute_path);
         test_setup_config.setup.overwrite = true;
         PianoBackend::setup_and_save(&test_setup_config).unwrap();
-
 
         #[derive(Debug, Serialize, Deserialize)]
         struct WorkerCommitResponse {
@@ -935,8 +954,14 @@ mod tests {
         );
         let beta = FsFr::rand();
         let req = RpcRequest::MasterOpen {
-            evals: evals.iter().map(|e| B64ENGINE.encode(e.to_bytes())).collect(),
-            proofs: proofs.iter().map(|p| B64ENGINE.encode(p.to_bytes())).collect(),
+            evals: evals
+                .iter()
+                .map(|e| B64ENGINE.encode(e.to_bytes()))
+                .collect(),
+            proofs: proofs
+                .iter()
+                .map(|p| B64ENGINE.encode(p.to_bytes()))
+                .collect(),
             beta: B64ENGINE.encode(beta.to_bytes()),
         };
         let response =
@@ -958,6 +983,10 @@ mod tests {
         let response =
             query_client::<MasterVerifyResponse>(client.clone(), validator_port, req).await?;
         assert!(response.valid);
+
+        // Cleanup
+        std::fs::remove_file(SETUP_PATH).unwrap();
+        std::fs::remove_file(PRECOMPUTE_PATH).unwrap();
         Ok(())
     }
 }
