@@ -7,4 +7,4 @@ pub fn timed<T>(name: &str, f: impl FnOnce() -> T) -> T {
     result
 }
 
-pub const B64ENGINE: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
+pub const B64ENGINE: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD_NO_PAD;
