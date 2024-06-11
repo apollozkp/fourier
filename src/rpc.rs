@@ -878,11 +878,10 @@ mod tests {
         // WORKER COMMIT
         tracing::debug!("Committing...");
         let mut worker_commitments = vec![];
-        for (i, poly) in worker_polynomials.iter().enumerate() {
+        for (i, coeffs) in lagrange_coeffs.iter().enumerate() {
             let req = RpcRequest::WorkerCommit {
                 i,
-                poly: poly
-                    .coeffs
+                poly: coeffs
                     .iter()
                     .map(|x| B64ENGINE.encode(x.to_bytes()))
                     .collect(),
@@ -897,11 +896,10 @@ mod tests {
         tracing::debug!("Opening...");
         let mut worker_proofs = vec![];
         let alpha = FsFr::rand();
-        for (i, poly) in worker_polynomials.iter().enumerate() {
+        for (i, coeffs) in lagrange_coeffs.iter().enumerate() {
             let req = RpcRequest::WorkerOpen {
                 i,
-                poly: poly
-                    .coeffs
+                poly: coeffs
                     .iter()
                     .map(|x| B64ENGINE.encode(x.to_bytes()))
                     .collect(),
@@ -944,14 +942,13 @@ mod tests {
         let master_commitment = backend.parse_g1_from_str(&response.commitment)?;
 
         // COMPUTE MASTER OPENING
-        let (evals, proofs) = worker_proofs.iter().fold(
-            (Vec::new(), Vec::new()),
-            |(mut evals, mut proofs), (y, pi)| {
-                evals.push(*y);
-                proofs.push(*pi);
-                (evals, proofs)
-            },
-        );
+        let evals = worker_polynomials
+            .iter()
+            .map(|p| backend.evaluate(p, &alpha))
+            .collect::<Vec<_>>();
+
+        let proofs = worker_proofs.iter().map(|(_, pi)| pi).collect::<Vec<_>>();
+
         let beta = FsFr::rand();
         let req = RpcRequest::MasterOpen {
             evals: evals

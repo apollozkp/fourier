@@ -1697,15 +1697,11 @@ mod tests {
             let master_commitment = backend.master_commit(&commitments);
 
             // Compute Master Opening
-            let (evals, proofs) = proofs.iter().fold(
-                (Vec::new(), Vec::new()),
-                |(mut evals, mut proofs), (y, pi)| {
-                    evals.push(*y);
-                    proofs.push(*pi);
-                    (evals, proofs)
-                },
-            );
-
+            let evals = polynomials
+                .iter()
+                .map(|p| p.eval(&alpha))
+                .collect::<Vec<_>>();
+            let proofs = proofs.iter().map(|(_, pi_0)| *pi_0).collect::<Vec<_>>();
             let (z, pi_f) = backend.master_open(&evals, &proofs, &beta)?;
 
             // NOTE: We check the reconstruction here as a sanity check
@@ -1897,5 +1893,64 @@ mod tests {
         test_save_load(&backend, false, coeffs, &commitments);
 
         std::fs::remove_file(FILENAME).unwrap();
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    /// This test demonstrates that a miner response has to be verified against the local
+    /// evaluation of the polynomial. This is to ensure that the miner is not lying about the
+    /// polynomial itself.
+    /// If we trust the miner's evaluation, then the miner can do the following:
+    /// 0. Precompute some polynomial f and its commitment
+    /// 1. Receive Challenge
+    /// 2. Replace Challenge polynomial with f
+    /// 3. Send commitment and proof
+    /// The miner skips the commitment step, saving computation time.
+    fn test_fake_poly() {
+        // Setup
+        const N: usize = 8;
+        const M: usize = 2;
+        let cfg = DistributedSetupConfig {
+            setup: crate::engine::config::SetupConfig {
+                scale: N,
+                generate_setup: true,
+                generate_precompute: true,
+                ..Default::default()
+            },
+            machines_scale: M,
+        };
+        let backend = PianoBackend::setup(&cfg).unwrap();
+
+        // Vars
+        let real_poly = generate_coeffs(N, M);
+        let fake_poly = generate_coeffs(N, M);
+
+        let alpha = FsFr::rand();
+
+        let real_evals = real_poly
+            .iter()
+            .map(|coeffs| {
+                backend.evaluate(
+                    &FsPoly::from_coeffs(&backend.fft_settings.fft_left(coeffs, true).unwrap()),
+                    &alpha,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        // Commit to real poly
+        let real_commitment = backend.worker_commit(0, &real_poly[0]).unwrap();
+        let (real_eval, real_proof) = backend.worker_open(0, &real_poly[0], &alpha).unwrap();
+
+        // Commit to fake poly
+        let fake_commitment = backend.worker_commit(1, &fake_poly[1]).unwrap();
+        let (fake_eval, fake_proof) = backend.worker_open(1, &fake_poly[1], &alpha).unwrap();
+
+        // Verify real poly
+        assert!(backend.worker_verify(0, &real_commitment, &alpha, &real_eval, &real_proof));
+        assert!(backend.worker_verify(0, &real_commitment, &alpha, &real_evals[0], &real_proof));
+
+        // Verify fake poly
+        assert!(backend.worker_verify(1, &fake_commitment, &alpha, &fake_eval, &fake_proof));
+        assert!(!backend.worker_verify(1, &fake_commitment, &alpha, &real_evals[1], &fake_proof));
     }
 }
