@@ -1,17 +1,16 @@
 import json
+import os
 import subprocess
 import time
 from typing import List
-
-import os
 
 import requests
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 1337
 DEFAULT_BIN = "target/release/fourier"
-DEFAULT_SETUP_PATH = "data/setup"
-DEFAULT_PRECOMPUTE_PATH = "data/precompute"
+DEFAULT_SETUP_PATH = "setup"
+DEFAULT_PRECOMPUTE_PATH = "precompute"
 DEFAULT_SKIP_PRECOMPUTE = False
 DEFAULT_UNCOMPRESSED = False
 
@@ -217,10 +216,10 @@ class CLI:
 class Client:
     def __init__(
         self,
+        setup_path,
+        precompute_path,
         host=DEFAULT_HOST,
         port=DEFAULT_PORT,
-        setup_path=DEFAULT_SETUP_PATH,
-        precompute_path=DEFAULT_PRECOMPUTE_PATH,
         uncompressed=DEFAULT_UNCOMPRESSED,
         bin=DEFAULT_BIN,
     ):
@@ -229,12 +228,6 @@ class Client:
         self.cli = CLI(bin=bin)
         if not os.path.exists(bin):
             print(f"Binary does not exist: {bin}")
-            raise FileNotFoundError
-        if not os.path.exists(setup_path):
-            print(f"Setup path does not exist: {setup_path}")
-            raise FileNotFoundError
-        if not os.path.exists(precompute_path):
-            print(f"Precompute path does not exist: {precompute_path}")
             raise FileNotFoundError
         self.setup_path = setup_path
         self.precompute_path = precompute_path
@@ -479,8 +472,8 @@ def master_verify(
 def test_routine(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
-    setup_path: str = "data/test_setup",
-    precompute_path: str = "data/test_precompute",
+    setup_path: str = None,
+    precompute_path: str = None,
     uncompressed: bool = True,
     bin: str = "target/release/fourier",
     scale: int = 6,
@@ -494,8 +487,12 @@ def test_routine(
         precompute_path=precompute_path,
         uncompressed=uncompressed,
     )
-    setup_path = setup_path if os.path.exists(setup_path) else None
-    precompute_path = precompute_path if os.path.exists(precompute_path) else None
+    setup_path = setup_path if (setup_path and os.path.exists(setup_path)) else None
+    precompute_path = (
+        precompute_path
+        if (precompute_path and os.path.exists(precompute_path))
+        else None
+    )
 
     n_workers = 2**machines_scale
     try:
@@ -540,16 +537,10 @@ if __name__ == "__main__":
     os.environ["RUST_LOG"] = "debug"
     HOST = "localhost"
     PORT = 1337
-    SETUP_PATH = "data/test_setup"
-    PRECOMPUTE_PATH = "data/test_precompute"
-    UNCOMPRESSED = True
     BIN = "target/release/fourier"
 
     test_routine(
         host=HOST,
         port=PORT,
-        setup_path=SETUP_PATH,
-        precompute_path=PRECOMPUTE_PATH,
-        uncompressed=UNCOMPRESSED,
         bin=BIN,
     )
