@@ -1,11 +1,9 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-
 use fourier::engine::config::{DistributedSetupConfig, SetupConfig};
-use fourier::engine::piano::PianoPrecomputation;
 use fourier::engine::piano::PianoBackend;
-use kzg::{Fr, Poly};
+use fourier::engine::piano::PianoPrecomputation;
+use kzg::{Fr};
 use rust_kzg_blst::types::fr::FsFr;
-use rust_kzg_blst::types::poly::FsPoly;
 
 /// Generate random coefficients for the test polynomial in the lagrange basis
 /// f(X, Y) = sum_{i=0}^{M-1} sum_{j=0}^{T-1} f_{i,j} R_i(Y) L_j(X)
@@ -22,7 +20,7 @@ fn generate_coeffs(n: usize, m: usize) -> Vec<Vec<FsFr>> {
     coeffs
 }
 
-fn prepare() -> (PianoBackend, Vec<FsPoly>) {
+fn prepare() -> (PianoBackend, Vec<Vec<FsFr>>) {
     const N: usize = 8;
     const M: usize = 2;
     let cfg = DistributedSetupConfig {
@@ -37,14 +35,7 @@ fn prepare() -> (PianoBackend, Vec<FsPoly>) {
     let backend = PianoBackend::setup(&cfg).unwrap();
 
     let lagrange_coeffs = generate_coeffs(N, M);
-    // Compute sub-polynomials in standard basis
-    let polynomials = (0..M)
-        .map(|i| {
-            let coeffs = lagrange_coeffs[i].clone();
-            FsPoly::from_coeffs(&backend.fft_settings.fft_left(&coeffs, true).unwrap())
-        })
-        .collect::<Vec<_>>();
-    (backend, polynomials)
+    (backend, lagrange_coeffs)
 }
 
 fn bench_commit_to_poly(c: &mut Criterion) {
@@ -57,7 +48,7 @@ fn bench_commit_to_poly(c: &mut Criterion) {
     c.bench_function("precompute commit_to_poly", |b| {
         b.iter(|| {
             polys.iter().enumerate().for_each(|(i, poly)| {
-                let _ = backend.commit(i, poly);
+                let _ = backend.worker_commit(i, poly);
             });
         })
     });
@@ -65,7 +56,7 @@ fn bench_commit_to_poly(c: &mut Criterion) {
     c.bench_function("no precompute commit_to_poly", |b| {
         b.iter(|| {
             polys.iter().enumerate().for_each(|(i, poly)| {
-                let _ = backend_without_precompute.commit(i, poly);
+                let _ = backend_without_precompute.worker_commit(i, poly);
             });
         })
     });

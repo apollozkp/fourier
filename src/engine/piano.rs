@@ -28,8 +28,8 @@ pub struct PianoBackend {
     pub piano_settings: PianoSettings,
 }
 
-use base64::Engine;
 use crate::utils::B64ENGINE;
+use base64::Engine;
 
 // Utils
 impl PianoBackend {
@@ -140,20 +140,20 @@ impl PianoBackend {
     ///           = prod g^{R_i(tau_Y) * L_j(tau_X) * f_j}
     ///           = g^{R_i(tau_Y) * f_i(tau_X)}
     /// NOTE: We are commiting to R_i(tau_Y) * f_i(X), not f_i(X)
-    pub fn commit(&self, i: usize, poly: &FsPoly) -> Result<FsG1, String> {
+    pub fn worker_commit(&self, i: usize, coeffs: &[FsFr]) -> Result<FsG1, String> {
         tracing::debug!(
             "Committing to polynomial f_i(X) of size {} as machine {}",
-            poly.len(),
+            coeffs.len(),
             i
         );
         let mut out = FsG1::default();
         rust_kzg_blst::kzg_proofs::g1_linear_combination(
             &mut out,
-            &(0..poly.len())
+            &(0..coeffs.len())
                 .map(|j| self.piano_settings.u(i, j))
                 .collect::<Vec<_>>(),
-            &self.fft_settings.fft_left(&poly.coeffs, false)?,
-            poly.len(),
+            &coeffs,
+            coeffs.len(),
             self.piano_settings.get_precomputation().get_u(i),
         );
 
@@ -184,7 +184,15 @@ impl PianoBackend {
     ///          = (R_i(tau_Y) * f_i(X) - R_i(tau_Y) * f_i(alpha)) / (X - alpha)
     /// So we are actually just opening f'(X) = R_i(tau_Y) * f_i(X)
     /// But we do return f_i(alpha)
-    pub fn open(&self, i: usize, poly: &FsPoly, alpha: &FsFr) -> Result<(FsFr, FsG1), String> {
+    pub fn worker_open(
+        &self,
+        i: usize,
+        coeffs: &[FsFr],
+        alpha: &FsFr,
+    ) -> Result<(FsFr, FsG1), String> {
+        // Transform polynomial from Lagrange basis to standard basis
+        let poly = FsPoly::from_coeffs(&self.fft_settings.fft_left(&coeffs, true).unwrap());
+
         tracing::debug!(
             "Opening polynomial f_i(X) of size {} as machine {}",
             poly.len(),
@@ -298,7 +306,14 @@ impl PianoBackend {
     /// We have g^{tau_Y}, so we can compute g^{R_i(tau_Y)} and then g^{R_i(tau_Y) * y}
     /// as g^{R_i(tau_Y)}^{y}
     /// Then we validate that e(commitment/ g^{y'}, g) == e(pi, g^{tau_X - alpha})
-    pub fn verify(&self, i: usize, commitment: &FsG1, alpha: &FsFr, y: &FsFr, pi: &FsG1) -> bool {
+    pub fn worker_verify(
+        &self,
+        i: usize,
+        commitment: &FsG1,
+        alpha: &FsFr,
+        y: &FsFr,
+        pi: &FsG1,
+    ) -> bool {
         tracing::debug!("Verifying opening of polynomial f_i(X) as machine {}", i);
         // Compute y' = g^{R_i(tau_Y) * y}
 
@@ -1393,7 +1408,7 @@ mod tests {
         let eval = FsFr::zero();
         let proof = FsG1::default();
 
-        assert!(backend.verify(i, &commitment, &alpha, &eval, &proof));
+        assert!(backend.worker_verify(i, &commitment, &alpha, &eval, &proof));
     }
 
     #[test]
@@ -1404,12 +1419,7 @@ mod tests {
         const M: usize = MACHINES;
 
         let coeffs = generate_coeffs(N, M);
-        let polys = coeffs
-            .iter()
-            .map(|coeffs| FsPoly::from_coeffs(coeffs))
-            .collect::<Vec<_>>();
 
-        let fft_settings = PianoFFTSettings::new(N, M).unwrap();
         let cfg = DistributedBackendConfig {
             backend: crate::engine::config::BackendConfig {
                 scale: N,
@@ -1421,15 +1431,14 @@ mod tests {
 
         // Commit to the polynomial using the backend
         let commitments = (0..M)
-            .map(|i| backend.commit(i, &polys[i]).unwrap())
+            .map(|i| backend.worker_commit(i, &coeffs[i]).unwrap())
             .collect::<Vec<_>>();
 
         // Compute commitment manually
         // Commitment = prod U_{0, j}^{f_j} where f_j is the j-th coefficient of the polynomial in the lagrange basis
 
         for i in 0..M {
-            let cob_coeffs = fft_settings.fft_left(&coeffs[i], false).unwrap();
-            let result = cob_coeffs
+            let result = coeffs[i]
                 .iter()
                 .enumerate()
                 .fold(FsG1::default(), |acc, (j, c)| {
@@ -1659,7 +1668,7 @@ mod tests {
             // Commitments
             tracing::debug!("Committing...");
             let commitments = (0..machines_count)
-                .map(|i| backend.commit(i, &polynomials[i]).unwrap())
+                .map(|i| backend.worker_commit(i, &lagrange_coeffs[i]).unwrap())
                 .collect::<Vec<_>>();
 
             // Openings
@@ -1667,7 +1676,7 @@ mod tests {
             let alpha = FsFr::rand();
             let beta = FsFr::rand();
             let proofs = (0..machines_count)
-                .map(|i| backend.open(i, &polynomials[i], &alpha).unwrap())
+                .map(|i| backend.worker_open(i, &lagrange_coeffs[i], &alpha).unwrap())
                 .collect::<Vec<_>>();
 
             // MASTER NODE
@@ -1676,7 +1685,7 @@ mod tests {
                 let commitment = commitments[i];
                 let (y, pi_0) = proofs[i];
                 tracing::debug!("Checking proof for machine {}", i);
-                let verify = backend.verify(i, &commitment, &alpha, &y, &pi_0);
+                let verify = backend.worker_verify(i, &commitment, &alpha, &y, &pi_0);
                 if !verify {
                     tracing::error!("Verification failed for machine {}", i);
                 } else {
@@ -1688,15 +1697,11 @@ mod tests {
             let master_commitment = backend.master_commit(&commitments);
 
             // Compute Master Opening
-            let (evals, proofs) = proofs.iter().fold(
-                (Vec::new(), Vec::new()),
-                |(mut evals, mut proofs), (y, pi)| {
-                    evals.push(*y);
-                    proofs.push(*pi);
-                    (evals, proofs)
-                },
-            );
-
+            let evals = polynomials
+                .iter()
+                .map(|p| p.eval(&alpha))
+                .collect::<Vec<_>>();
+            let proofs = proofs.iter().map(|(_, pi_0)| *pi_0).collect::<Vec<_>>();
             let (z, pi_f) = backend.master_open(&evals, &proofs, &beta)?;
 
             // NOTE: We check the reconstruction here as a sanity check
@@ -1748,8 +1753,7 @@ mod tests {
                 if ACTIVE_MACHINES.contains(&i) {
                     FsG1::default()
                 } else {
-                    let poly = FsPoly::from_coeffs(coeffs);
-                    backend.commit(i, &poly).unwrap()
+                    backend.worker_commit(i, &coeffs).unwrap()
                 }
             })
             .collect::<Vec<_>>();
@@ -1765,15 +1769,14 @@ mod tests {
                     (FsFr::zero(), FsG1::default())
                 } else {
                     tracing::debug!("opening machine {}", i);
-                    let poly = FsPoly::from_coeffs(&coeffs[i]);
-                    backend.open(i, &poly, &alpha).unwrap()
+                    backend.worker_open(i, &coeffs[i], &alpha).unwrap()
                 }
             })
             .collect::<Vec<_>>();
 
         // verify that the commitments are correct
         for (i, (commitment, (eval, proof))) in commitments.iter().zip(proofs.iter()).enumerate() {
-            assert!(backend.verify(i, commitment, &alpha, eval, proof))
+            assert!(backend.worker_verify(i, commitment, &alpha, eval, proof))
         }
 
         let (evals, proofs): (Vec<FsFr>, Vec<FsG1>) = proofs.iter().cloned().unzip();
@@ -1839,7 +1842,7 @@ mod tests {
         fn test_save_load(
             backend: &PianoBackend,
             compressed: bool,
-            polys: &[FsPoly],
+            polys: Vec<Vec<FsFr>>,
             commitments: &[FsG1],
         ) {
             crate::utils::timed("Saving Precomputations", || {
@@ -1857,7 +1860,7 @@ mod tests {
             let new_commitments =
                 crate::utils::timed(format!("Committing {} polynomials", M).as_str(), || {
                     (0..M)
-                        .map(|i| new_backend.commit(i, &polys[i]).unwrap())
+                        .map(|i| new_backend.worker_commit(i, &polys[i]).unwrap())
                         .collect::<Vec<_>>()
                 });
 
@@ -1883,16 +1886,71 @@ mod tests {
         let backend = PianoBackend::setup(&cfg).unwrap();
 
         let coeffs = generate_coeffs(N, M);
-        let polynomials = coeffs
-            .iter()
-            .map(|coeffs| FsPoly::from_coeffs(coeffs))
-            .collect::<Vec<_>>();
         let commitments = (0..M)
-            .map(|i| backend.commit(i, &polynomials[i]).unwrap())
+            .map(|i| backend.worker_commit(i, &coeffs[i]).unwrap())
             .collect::<Vec<_>>();
 
-        test_save_load(&backend, false, &polynomials, &commitments);
+        test_save_load(&backend, false, coeffs, &commitments);
 
         std::fs::remove_file(FILENAME).unwrap();
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    /// This test demonstrates that a miner response has to be verified against the local
+    /// evaluation of the polynomial. This is to ensure that the miner is not lying about the
+    /// polynomial itself.
+    /// If we trust the miner's evaluation, then the miner can do the following:
+    /// 0. Precompute some polynomial f and its commitment
+    /// 1. Receive Challenge
+    /// 2. Replace Challenge polynomial with f
+    /// 3. Send commitment and proof
+    /// The miner skips the commitment step, saving computation time.
+    fn test_fake_poly() {
+        // Setup
+        const N: usize = 8;
+        const M: usize = 2;
+        let cfg = DistributedSetupConfig {
+            setup: crate::engine::config::SetupConfig {
+                scale: N,
+                generate_setup: true,
+                generate_precompute: true,
+                ..Default::default()
+            },
+            machines_scale: M,
+        };
+        let backend = PianoBackend::setup(&cfg).unwrap();
+
+        // Vars
+        let real_poly = generate_coeffs(N, M);
+        let fake_poly = generate_coeffs(N, M);
+
+        let alpha = FsFr::rand();
+
+        let real_evals = real_poly
+            .iter()
+            .map(|coeffs| {
+                backend.evaluate(
+                    &FsPoly::from_coeffs(&backend.fft_settings.fft_left(coeffs, true).unwrap()),
+                    &alpha,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        // Commit to real poly
+        let real_commitment = backend.worker_commit(0, &real_poly[0]).unwrap();
+        let (real_eval, real_proof) = backend.worker_open(0, &real_poly[0], &alpha).unwrap();
+
+        // Commit to fake poly
+        let fake_commitment = backend.worker_commit(1, &fake_poly[1]).unwrap();
+        let (fake_eval, fake_proof) = backend.worker_open(1, &fake_poly[1], &alpha).unwrap();
+
+        // Verify real poly
+        assert!(backend.worker_verify(0, &real_commitment, &alpha, &real_eval, &real_proof));
+        assert!(backend.worker_verify(0, &real_commitment, &alpha, &real_evals[0], &real_proof));
+
+        // Verify fake poly
+        assert!(backend.worker_verify(1, &fake_commitment, &alpha, &fake_eval, &fake_proof));
+        assert!(!backend.worker_verify(1, &fake_commitment, &alpha, &real_evals[1], &fake_proof));
     }
 }
